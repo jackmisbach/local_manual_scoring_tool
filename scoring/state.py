@@ -38,7 +38,6 @@ class QueueEntry(TypedDict):
     uuid: str
     task_name: str
     sample_id: str
-    model: str
     status: QueueStatus
     score: NotRequired[float]
     explanation: NotRequired[str]
@@ -68,13 +67,12 @@ class SampleInfo(TypedDict):
     banner and the image must be supplied via ``--image``.
     """
 
+    run_uuid: str
     task_name: str
     task_version: str
     task_variant: str
     project_dir: str
     image: str
-    model: str
-    eval_set_id: str
     # True when the sample has no ``sample.json``; the scoring page shows an
     # explanatory banner and suppresses metadata-derived UI.
     no_metadata: bool
@@ -150,16 +148,19 @@ def sample_task_name(data: dict[str, Any]) -> str:
     return str(data.get("task") or data.get("task_name") or "")
 
 
-def _sample_info(data: dict[str, Any]) -> SampleInfo:
-    """Build a :class:`SampleInfo` from a ``sample.json`` dict (``{}`` if none)."""
+def _sample_info(data: dict[str, Any], uuid: str = "") -> SampleInfo:
+    """Build a :class:`SampleInfo` from a ``sample.json`` dict (``{}`` if none).
+
+    ``run_uuid`` falls back to ``uuid`` (the sample dir name) when ``sample.json``
+    doesn't carry it — the dir name is the sample's run UUID.
+    """
     return {
+        "run_uuid": str(data.get("run_uuid") or uuid or ""),
         "task_name": sample_task_name(data),
         "task_version": str(data.get("task_version", "") or ""),
         "task_variant": str(data.get("task_variant") or data.get("variant") or ""),
         "project_dir": str(data.get("project_dir", "") or DEFAULT_PROJECT_DIR),
         "image": str(data.get("image", "") or ""),
-        "model": str(data.get("model", "") or ""),
-        "eval_set_id": str(data.get("eval_set_id", "") or ""),
         "no_metadata": not data,
     }
 
@@ -168,13 +169,13 @@ def local_sample_info(uuid: str, samples_dir: Path) -> SampleInfo:
     """Build a :class:`SampleInfo` from the sample dir's ``sample.json``.
 
     Recognized ``sample.json`` keys: ``task`` (task name), ``image`` (the image
-    tarball filename inside the images dir), and optionally ``task_variant`` /
-    ``model`` / ``project_dir`` / ``eval_set_id``. Scoring works even with no
+    tarball filename inside the images dir), and optionally ``run_uuid`` /
+    ``task_variant`` / ``project_dir``. Scoring works even with no
     ``sample.json`` (the form only needs the project dir and the guidance
     links); ``no_metadata`` then drives an explanatory banner and the image
     must be supplied via ``--image``.
     """
-    return _sample_info(load_sample_json(samples_dir, uuid))
+    return _sample_info(load_sample_json(samples_dir, uuid), uuid)
 
 
 def stub_sample_info() -> SampleInfo:

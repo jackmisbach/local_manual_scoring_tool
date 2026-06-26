@@ -3,7 +3,7 @@
 Covers the two files at the samples root:
 
 - ``ui_state.jsonl``: keyed per-sample records holding both the tracking subset
-  (status / eval_set_id / updated_at / stashed) and the working/UI subset
+  (status / updated_at / stashed) and the working/UI subset
   (history / stash / finish_events / scratchpad / timers); and
 - ``scores.jsonl``: the append-only flat export of finalized scores.
 
@@ -66,7 +66,6 @@ def test_tracking_round_trips_through_ui_state(tmp_path: Path) -> None:
     tracking: dict[str, TrackedSample] = {
         UUID: {
             "status": STATUS_SCORED,
-            "eval_set_id": "es1",
             "updated_at": "2026-06-25T00:00:00Z",
         }
     }
@@ -77,7 +76,6 @@ def test_tracking_round_trips_through_ui_state(tmp_path: Path) -> None:
 
     loaded = load_tracking(tmp_path)
     assert loaded[UUID]["status"] == STATUS_SCORED
-    assert loaded[UUID]["eval_set_id"] == "es1"
     assert loaded[UUID]["updated_at"] == "2026-06-25T00:00:00Z"
     # No stash draft -> the stashed flag is absent (treated as False).
     assert "stashed" not in loaded[UUID]
@@ -87,13 +85,13 @@ def test_save_tracking_only_rewrites_touched_rows(tmp_path: Path) -> None:
     """A second writer that touches one id leaves the other id's row intact."""
     save_tracking(
         tmp_path,
-        {UUID: {"status": STATUS_OPEN, "eval_set_id": "", "updated_at": "t1"}},
+        {UUID: {"status": STATUS_OPEN, "updated_at": "t1"}},
         [UUID],
     )
     other = "zzzzzzzzzzzzzzzzzzzzzz"
     save_tracking(
         tmp_path,
-        {other: {"status": STATUS_SKIPPED, "eval_set_id": "", "updated_at": "t2"}},
+        {other: {"status": STATUS_SKIPPED, "updated_at": "t2"}},
         [other],
     )
     loaded = load_tracking(tmp_path)
@@ -124,7 +122,7 @@ def test_bare_tracking_row_has_no_score_file(tmp_path: Path) -> None:
     """A sample with only a tracking row (no score keys) reads as no score file."""
     save_tracking(
         tmp_path,
-        {UUID: {"status": STATUS_OPEN, "eval_set_id": "", "updated_at": "t"}},
+        {UUID: {"status": STATUS_OPEN, "updated_at": "t"}},
         [UUID],
     )
     assert load_score_file(tmp_path, UUID) is None
@@ -196,7 +194,7 @@ def test_append_finish_event_records_author_and_timestamp(tmp_path: Path) -> Non
 
 def test_append_score_jsonl_writes_flat_parseable_line(tmp_path: Path) -> None:
     entry = _entry(value=0.6, minutes=15)
-    info: dict[str, Any] = {"task_name": "demo", "model": "m1"}
+    info: dict[str, Any] = {"task_name": "demo"}
     path = append_score_jsonl(tmp_path, UUID, entry, info)
 
     assert path == tmp_path / SCORES_FILENAME
@@ -212,7 +210,6 @@ def test_append_score_jsonl_writes_flat_parseable_line(tmp_path: Path) -> None:
         "minutes_to_score",
         "scored_at",
         "task_name",
-        "model",
     }
     assert row["id"] == UUID
     assert row["scorer"] == SCORER
@@ -221,11 +218,10 @@ def test_append_score_jsonl_writes_flat_parseable_line(tmp_path: Path) -> None:
     assert row["minutes_to_score"] == 15
     assert row["scored_at"] == "2026-06-25T00:00:00Z"
     assert row["task_name"] == "demo"
-    assert row["model"] == "m1"
 
 
 def test_append_score_jsonl_appends(tmp_path: Path) -> None:
-    info: dict[str, Any] = {"task_name": "demo", "model": ""}
+    info: dict[str, Any] = {"task_name": "demo"}
     append_score_jsonl(tmp_path, UUID, _entry(value=0.1), info)
     append_score_jsonl(tmp_path, UUID, _entry(value=0.2), info)
     path = tmp_path / SCORES_FILENAME

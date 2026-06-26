@@ -71,7 +71,6 @@ def _build_state(samples_dir: Path) -> ScoringState:
     tracking: dict[str, TrackedSample] = {
         SAMPLE_UUID: {
             "status": STATUS_OPEN,
-            "eval_set_id": "",
             "updated_at": "2026-01-01T00:00:00Z",
         }
     }
@@ -83,7 +82,6 @@ def _build_state(samples_dir: Path) -> ScoringState:
                 "uuid": SAMPLE_UUID,
                 "task_name": SAMPLE_TASK,
                 "sample_id": "s1",
-                "model": "",
                 "status": "open",
             }
         ],

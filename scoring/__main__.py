@@ -173,7 +173,6 @@ def build_local_queue(
             "uuid": uuid,
             "task_name": task_name or "(no task)",
             "sample_id": uuid,
-            "model": str(data.get("model", "") or ""),
             "status": status,
             **summary_fields,  # type: ignore[typeddict-item]
         }
@@ -199,8 +198,8 @@ def populate_tracking_from_queue(
     touched: set[str] | None = None,
 ) -> int:
     """Ensure every scorable queue id has a tracking row. Returns rows added."""
-    by_id = {e["uuid"]: "" for e in queue if e["uuid"] not in tracking}
-    return ensure_tracking_entries(tracking, by_id, touched=touched)
+    missing = [e["uuid"] for e in queue if e["uuid"] not in tracking]
+    return ensure_tracking_entries(tracking, missing, touched=touched)
 
 
 # ---------------------------------------------------------------------------

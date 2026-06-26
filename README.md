@@ -139,8 +139,8 @@ one entry).
    `data/samples/ui_state.jsonl`, so quitting and re-running resumes where you
    left off.
 
-The model name is always hidden (the tool is **blind-only** — there is no
-unblind control).
+The tool is **blind-only**: the model name is never recorded or shown anywhere
+(there is no model field in `sample.json`, the queue, or `scores.jsonl`).
 
 ## GUI tasks (noVNC)
 
