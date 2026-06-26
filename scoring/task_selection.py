@@ -46,17 +46,3 @@ def save_selection(selection: dict[str, bool]) -> None:
             existing.extend(diffs)
             config["changed"] = existing
         save_config(config)
-
-
-def unseen_tasks(selection: dict[str, bool], all_tasks: list[str]) -> list[str]:
-    """Tasks present in the eval set but not yet recorded in the user config."""
-    return [t for t in all_tasks if t not in selection]
-
-
-def is_task_selected(selection: dict[str, bool], task_name: str) -> bool:
-    """Default to ``False`` for tasks the user hasn't decided on yet.
-
-    Callers should gate the queue build on :func:`unseen_tasks` so the user is
-    prompted before any unseen task gets silently filtered out.
-    """
-    return selection.get(task_name, False)
