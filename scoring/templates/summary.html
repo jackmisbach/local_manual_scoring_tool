@@ -297,7 +297,6 @@
                     <th class="sortable" data-sort="index" data-type="number">#</th>
                     <th class="sortable" data-sort="uuid" data-type="text">GUID</th>
                     <th class="sortable" data-sort="task" data-type="text">Task</th>
-                    <th class="sortable blind-hidden" data-sort="model" data-type="text">Model</th>
                     <th class="sortable" data-sort="score" data-type="number">Score</th>
                     <th class="sortable" data-sort="minutes" data-type="number">Minutes</th>
                     <th class="sortable" data-sort="status" data-type="text">Status</th>
@@ -316,7 +315,6 @@
                     data-index="{{ loop.index0 }}"
                     data-uuid="{{ s.uuid }}"
                     data-task="{{ (s.sample_id or s.task_name) | lower }}"
-                    data-model="{{ s.model | lower }}"
                     data-score="{{ s.score if s.score is defined and s.score is not none else '' }}"
                     data-minutes="{{ s.minutes_to_score if s.minutes_to_score is defined and s.minutes_to_score is not none else '' }}"
                     data-status-sort="{{ s.status }}"
@@ -334,7 +332,6 @@
                         {{ s.sample_id[:60] if s.sample_id else s.task_name }}
                         {% endif %}
                     </td>
-                    <td class="blind-hidden">{{ s.model }}</td>
                     <td class="score">{{ s.score if s.score is defined and s.score is not none else '—' }}</td>
                     <td>{{ s.minutes_to_score if s.minutes_to_score is defined and s.minutes_to_score is not none else '—' }}</td>
                     <td class="status-{{ s.status }}">{{ s.status.replace("_", " ") }}</td>

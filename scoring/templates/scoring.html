@@ -1023,10 +1023,8 @@
         <details class="blind-hidden">
             <summary style="cursor: pointer; font-weight: bold; margin-bottom: 8px">Run Info</summary>
             <div class="run-info">
-                <span><strong>Model:</strong> <span data-info-field="model">{{ info.model or '?' }}</span></span>
                 <span><strong>Variant:</strong> <span data-info-field="task_variant">{{ info.task_variant or '?' }}</span></span>
                 <span><strong>Version:</strong> <span data-info-field="task_version">{{ info.task_version or '?' }}</span></span>
-                <span><strong>Eval Set:</strong> <span data-info-field="eval_set_id">{{ info.eval_set_id or '?' }}</span></span>
             </div>
         </details>
         {% endif %}

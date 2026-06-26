@@ -12,7 +12,7 @@ Two JSONL files live at the samples root:
 
 - ``scores.jsonl`` — append-only canonical export. One flat line per finalized
   score submission (``id``, ``scorer``, ``value``, ``explanation``,
-  ``minutes_to_score``, ``scored_at``, ``task_name``, ``model``).
+  ``minutes_to_score``, ``scored_at``, ``task_name``).
 
 A third small file, ``.task_scratchpads.json``, keeps reusable per-task notes
 (keyed by task name), seeded into a sample's scratch pad when you open it.
@@ -63,7 +63,6 @@ class TrackedSample(TypedDict):
     """
 
     status: Status
-    eval_set_id: str
     updated_at: str
     stashed: NotRequired[bool]
 
@@ -142,7 +141,7 @@ class ScoreFile(TypedDict):
 
 
 # Keys of a record that belong to the ScoreFile (working/UI) view. Everything
-# else in a record (status, eval_set_id, updated_at, stashed) is the tracking view.
+# else in a record (status, updated_at, stashed) is the tracking view.
 _SCORE_KEYS: frozenset[str] = frozenset(
     {"history", "stash", "finish_events", "scratchpad", "timers"}
 )
@@ -213,7 +212,7 @@ def _ensure_record(records: dict[str, dict[str, Any]], sample_id: str) -> dict[s
     """Return the record for ``sample_id``, seeding an ``open`` tracking row."""
     rec = records.get(sample_id)
     if rec is None:
-        rec = {"id": sample_id, "status": STATUS_OPEN, "eval_set_id": "", "updated_at": now_iso()}
+        rec = {"id": sample_id, "status": STATUS_OPEN, "updated_at": now_iso()}
         records[sample_id] = rec
     return rec
 
@@ -229,7 +228,6 @@ def load_tracking(root: Path) -> dict[str, TrackedSample]:
     for sample_id, rec in _load_records(root).items():
         entry: TrackedSample = {
             "status": cast(Status, rec.get("status", STATUS_OPEN)),
-            "eval_set_id": rec.get("eval_set_id", "") or "",
             "updated_at": rec.get("updated_at", "") or "",
         }
         if rec.get("stashed"):
@@ -257,7 +255,6 @@ def save_tracking(
                 continue
             rec = _ensure_record(records, sample_id)
             rec["status"] = entry["status"]
-            rec["eval_set_id"] = entry.get("eval_set_id", "") or ""
             rec["updated_at"] = entry.get("updated_at", "") or now_iso()
             if entry.get("stashed"):
                 rec["stashed"] = True
@@ -270,16 +267,13 @@ def set_status(
     tracking: dict[str, TrackedSample],
     uuid: str,
     status: Status,
-    eval_set_id: str = "",
     *,
     touched: set[str] | None = None,
 ) -> None:
     """Upsert an in-memory tracking entry, preserving the ``stashed`` flag."""
     existing = tracking.get(uuid)
-    resolved_eval_set = eval_set_id or (existing["eval_set_id"] if existing else "")
     entry: TrackedSample = {
         "status": status,
-        "eval_set_id": resolved_eval_set,
         "updated_at": now_iso(),
     }
     if existing is not None and existing.get("stashed"):
@@ -293,21 +287,16 @@ def set_stashed(
     tracking: dict[str, TrackedSample],
     uuid: str,
     stashed: bool,
-    eval_set_id: str = "",
     *,
     touched: set[str] | None = None,
 ) -> None:
     """Flip the in-memory ``stashed`` flag without changing the status."""
-    existing = tracking.get(uuid)
-    if existing is None:
+    if uuid not in tracking:
         tracking[uuid] = {
             "status": STATUS_OPEN,
-            "eval_set_id": eval_set_id,
             "updated_at": now_iso(),
         }
     entry: TrackedSample = dict(tracking[uuid])  # type: ignore[typeddict-item]
-    if eval_set_id:
-        entry["eval_set_id"] = eval_set_id
     entry["updated_at"] = now_iso()
     if stashed:
         entry["stashed"] = True
@@ -320,18 +309,17 @@ def set_stashed(
 
 def ensure_tracking_entries(
     tracking: dict[str, TrackedSample],
-    uuids_by_eval_set: dict[str, str],
+    uuids: Iterable[str],
     *,
     touched: set[str] | None = None,
 ) -> int:
     """Create ``open`` rows for any queue uuids missing from the in-memory map."""
     added = 0
-    for uuid, eval_set_id in uuids_by_eval_set.items():
+    for uuid in uuids:
         if uuid in tracking:
             continue
         tracking[uuid] = {
             "status": STATUS_OPEN,
-            "eval_set_id": eval_set_id,
             "updated_at": now_iso(),
         }
         added += 1
@@ -365,7 +353,7 @@ def load_score_file(root: Path, uuid: str) -> ScoreFile | None:
 def write_score_file(root: Path, uuid: str, score_file: ScoreFile) -> None:
     """Replace the score/UI portion of ``uuid``'s record with ``score_file``.
 
-    Tracking fields (status, eval_set_id, updated_at, stashed) are preserved;
+    Tracking fields (status, updated_at, stashed) are preserved;
     score keys absent from ``score_file`` are removed (so e.g. clearing the
     stash drops it).
     """
@@ -477,7 +465,7 @@ def append_score_jsonl(root: Path, uuid: str, entry: SavedScore, info: dict[str,
     """Append one flat finalized-score line to ``scores.jsonl``.
 
     ``entry`` is the SavedScore just appended to history; ``info`` is the
-    sample's metadata (task_name, model). Returns the path written to.
+    sample's metadata (task_name). Returns the path written to.
     """
     score = entry.get("score") or {}
     meta = score.get("metadata") or {}
@@ -489,7 +477,6 @@ def append_score_jsonl(root: Path, uuid: str, entry: SavedScore, info: dict[str,
         "minutes_to_score": meta.get("minutes_spent_scoring"),
         "scored_at": meta.get("scored_at") or now_iso(),
         "task_name": info.get("task_name", "") or "",
-        "model": info.get("model", "") or "",
     }
     path = scores_path(root)
     with _scores_lock:

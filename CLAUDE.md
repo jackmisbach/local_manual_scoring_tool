@@ -14,7 +14,8 @@ Key invariants (do not reintroduce what was stripped):
 
 - **No Hawk, no AWS/S3, no ECR, no network sync, no CI screenshots.** The only
   place that intentionally talks to Hawk/AWS/ECR is `dev/` (staging utilities).
-- **Blind-only.** The model name is always hidden; there is no unblind control.
+- **Blind-only.** The model name is never recorded or shown — there is no model
+  field anywhere in the tool (not in `sample.json`, the queue, or `scores.jsonl`).
 - **Images are tarballs loaded on demand.** No `docker pull`. The tool reads a
   `docker save` tarball's `RepoTag` and `docker load`s it if not already present.
 - **Outputs:** finalized scores go to `scores.jsonl`; all working/UI state goes
@@ -32,7 +33,7 @@ Key invariants (do not reintroduce what was stripped):
 - `scoring/state.py` — TypedDicts for the shared `ScoringState` / `QueueEntry` /
   `SampleInfo`, plus `sample.json` loading (`load_sample_json`,
   `local_sample_info`). Recognized `sample.json` keys: `task` (or `task_name`),
-  `image`, and optionally `task_variant` / `model` / `project_dir`.
+  `image`, and optionally `run_uuid` / `task_variant` / `project_dir`.
 - `scoring/store.py` — the on-disk JSONL store (see below). Tracking view + score
   (working/UI) view over `ui_state.jsonl`, plus the `scores.jsonl` export and
   `.task_scratchpads.json` per-task notes.
@@ -59,7 +60,7 @@ JSONL / state files at the samples root:
 
 - `scores.jsonl` — append-only canonical export, one flat line per finalized
   score: `id`, `scorer`, `value`, `explanation`, `minutes_to_score`,
-  `scored_at`, `task_name`, `model`.
+  `scored_at`, `task_name`.
 - `ui_state.jsonl` — one line per sample (keyed by `id`), holding both the
   tracking subset (`status`, `eval_set_id`, `updated_at`, `stashed`) and the
   working/UI subset (`history`, `stash`, `finish_events`, `scratchpad`,

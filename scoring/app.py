@@ -605,7 +605,6 @@ def create_app(
         *,
         status_override: str | None = None,
         preserve_skipped: bool = False,
-        eval_set_id: str = "",
     ) -> None:
         """Re-derive tracking + queue state for ``uuid`` from disk.
 
@@ -652,8 +651,8 @@ def create_app(
             new_status = status_override
 
         touched = state["tracking_touched"]
-        set_status(state["tracking"], uuid, new_status, eval_set_id, touched=touched)  # type: ignore[arg-type]
-        set_stashed(state["tracking"], uuid, has_stash, eval_set_id, touched=touched)
+        set_status(state["tracking"], uuid, new_status, touched=touched)  # type: ignore[arg-type]
+        set_stashed(state["tracking"], uuid, has_stash, touched=touched)
 
         for entry in state["queue"]:
             if entry["uuid"] != uuid:
@@ -773,10 +772,9 @@ def create_app(
         with lock:
             uuid = state["uuid"]
             samples_dir = state["samples_dir"]
-            eval_set_id = state["info"]["eval_set_id"]
         clear_finish_events(samples_dir, uuid)
         with lock:
-            sync_sample_state(uuid, eval_set_id=eval_set_id)
+            sync_sample_state(uuid)
             save_fn(state)
         return jsonify(success=True)
 
@@ -827,11 +825,7 @@ def create_app(
             return jsonify(success=False, error="Not in queue mode"), 400
         with lock:
             uuid = state["queue"][state["current_idx"]]["uuid"]
-            sync_sample_state(
-                uuid,
-                status_override=STATUS_SKIPPED,
-                eval_set_id=state["info"]["eval_set_id"],
-            )
+            sync_sample_state(uuid, status_override=STATUS_SKIPPED)
             save_fn(state)
         return advance_response()
 
@@ -850,7 +844,6 @@ def create_app(
         with lock:
             uuid = state["uuid"]
             samples_dir = state["samples_dir"]
-            eval_set_id = state["info"]["eval_set_id"]
             scorer_email = state["scorer_email"]
         draft = _form_to_score_event(
             form,
@@ -858,7 +851,7 @@ def create_app(
         )
         with lock:
             save_stash(samples_dir, uuid, draft)
-            sync_sample_state(uuid, preserve_skipped=True, eval_set_id=eval_set_id)
+            sync_sample_state(uuid, preserve_skipped=True)
             save_fn(state)
 
         return jsonify(success=True, score_path=str(scores_path(samples_dir)))
@@ -958,9 +951,8 @@ def create_app(
         with lock:
             uuid = state["uuid"]
             samples_dir = state["samples_dir"]
-            eval_set_id = state["info"]["eval_set_id"]
             clear_stash(samples_dir, uuid)
-            sync_sample_state(uuid, preserve_skipped=True, eval_set_id=eval_set_id)
+            sync_sample_state(uuid, preserve_skipped=True)
             save_fn(state)
         return jsonify(success=True)
 
