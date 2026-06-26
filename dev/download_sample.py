@@ -6,10 +6,10 @@ For each run (sample) UUID this populates ``data/samples/<uuid>/`` with:
   - ``project/``    — the agent's project directory, pulled from the sample's
                       S3 artifacts (falls back to ``artifacts/`` for older
                       samples).
-  - ``sample.json`` — ``{"run_uuid": ..., "task": ..., "image": ...}`` where
-                      ``image`` is the task image's tarball name, e.g.
-                      ``sunlight-0_1_0.tar`` (the file
-                      ``download_starting_image.py`` produces).
+  - ``sample.json`` — ``{"task": ..., "image": ...}`` where ``image`` is the
+                      task image's tarball name, e.g. ``sunlight-0_1_0.tar``
+                      (the file ``download_starting_image.py`` produces). The
+                      sample's run UUID is the ``<uuid>/`` dir name itself.
 
 It mirrors the resolution / S3 flow in METR/manual-scoring-tool's
 ``scoring/infra.py`` but is self-contained (stdlib + the ``hawk`` and ``aws``
@@ -89,7 +89,6 @@ def download_one(uuid: str, output_dir: Path, force: bool) -> Path:
     download_project(artifact_url, dest_dir, force=force)
 
     sample = {
-        "run_uuid": uuid,
         "task": info["task_name"],
         "image": image_tar,
     }

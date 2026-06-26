@@ -3,11 +3,11 @@
 Two JSONL files live at the samples root:
 
 - ``ui_state.jsonl`` — one line per sample, keyed by sample ``id`` (the sample
-  dir name). Each record holds both the sample's tracking state (``status``,
-  ``updated_at``, optional ``stashed``) and its working/UI state (``history``,
-  ``stash``, ``finish_events``, ``scratchpad``, ``timers``).
-  This single keyed store replaces the upstream tool's per-sample ``_score.json``
-  files plus the root ``tracking.json``. Updates are read-modify-rewrite under a
+  dir name). A record holds the sample's working/UI state (``history``,
+  ``stash``, ``finish_events``, ``scratchpad``, ``timers``) plus an optional
+  ``skipped`` flag. Everything else about a sample's status is *derived* from
+  this content (see :func:`derive_queue_status`), not stored — a sample the user
+  hasn't touched has no record at all. Updates are read-modify-rewrite under a
   module lock.
 
 - ``scores.jsonl`` — append-only canonical export. One flat line per finalized
@@ -17,19 +17,19 @@ Two JSONL files live at the samples root:
 A third small file, ``.task_scratchpads.json``, keeps reusable per-task notes
 (keyed by task name), seeded into a sample's scratch pad when you open it.
 
-Status taxonomy (shared between the store and the in-memory queue):
+Status taxonomy (a derived queue-entry value — only ``skipped`` is persisted):
 
-- ``open`` — sample is set up for scoring but the user hasn't acted yet.
+- ``open`` — sample has no saved scoring content yet.
 - ``scored`` — at least one history entry exists.
-- ``done`` — user clicked "Done Scoring This Sample".
-- ``skipped`` — user actively skipped.
+- ``done`` — user clicked "Done Scoring This Sample" (a finish event exists).
+- ``skipped`` — user actively skipped; the lone persisted flag, surfaced only
+  while the sample has no history/finish of its own.
 """
 
 import json
 import logging
 import threading
 import time
-from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Literal, NotRequired, TypedDict, cast
 
@@ -53,18 +53,6 @@ STATUS_DONE: Status = "done"
 EXISTING_METADATA_DISPLAY: tuple[tuple[str, str], ...] = (
     ("Minutes spent scoring", "minutes_spent_scoring"),
 )
-
-
-class TrackedSample(TypedDict):
-    """The tracking subset of a ``ui_state.jsonl`` record.
-
-    ``stashed`` is omitted (not written as ``false``) when the sample has no
-    in-progress draft — consumers should treat absence as ``False``.
-    """
-
-    status: Status
-    updated_at: str
-    stashed: NotRequired[bool]
 
 
 class ScoreFormData(TypedDict, total=False):
@@ -140,11 +128,16 @@ class ScoreFile(TypedDict):
     timers: NotRequired[TimerState]
 
 
-# Keys of a record that belong to the ScoreFile (working/UI) view. Everything
-# else in a record (status, updated_at, stashed) is the tracking view.
+# Keys of a record that belong to the ScoreFile (working/UI) view.
 _SCORE_KEYS: frozenset[str] = frozenset(
     {"history", "stash", "finish_events", "scratchpad", "timers"}
 )
+
+# Every key persisted in a record besides ``id``: the working/UI score view plus
+# the lone ``skipped`` tracking flag. Anything else (e.g. legacy
+# status/updated_at/stashed/eval_set_id from older formats) is dropped the first
+# time a record is rewritten.
+_RECORD_KEYS: frozenset[str] = _SCORE_KEYS | {"skipped"}
 
 
 def now_iso() -> str:
