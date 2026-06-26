@@ -125,7 +125,6 @@ def _make_client(state: ScoringState) -> FlaskClient:
         lock=lock,
         advance_fn=lambda: "advanced",
         save_fn=save_state,
-        mark_broken_skipped_fn=lambda _u, _e: None,
         rebuild_queue_fn=lambda: None,
     )
     flask_app.config.update(TESTING=True)

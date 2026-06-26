@@ -332,7 +332,6 @@ def create_app(
     lock: threading.Lock,
     advance_fn: Callable[[], AdvanceResult],
     save_fn: Callable[[ScoringState], None],
-    mark_broken_skipped_fn: Callable[[str, str], None],
     rebuild_queue_fn: Callable[[], None],
 ) -> Flask:
     app = Flask(__name__)
@@ -368,7 +367,6 @@ def create_app(
         with lock:
             pending_selection = state.get("pending_task_selection", False)
             pending_summary = state.get("pending_summary", False)
-            broken = state.get("pending_broken")
             uuid = state["uuid"]
             info = state["info"]
             container_name = state["container_name"]
@@ -394,7 +392,7 @@ def create_app(
         # its own drain. pending_summary covers the startup case where the
         # whole eval set was already processed; cleared by /api/navigate
         # once the user picks a row to open.
-        if mode in ("queue",) and broken is None and (not queue or pending_summary):
+        if mode == "queue" and (not queue or pending_summary):
             return redirect("/summary")
         # Pre-fill the form from the on-disk score file when the tracking
         # status indicates the user previously saved something for this
@@ -430,11 +428,6 @@ def create_app(
             most_invested_history = most_invested_entry_for_scorer(score_file, scorer_email)
             history_entries = history_for_scorer(score_file, scorer_email)
         prior_max_minutes = _max_prior_minutes(score_file, scorer_email)
-        if broken is not None:
-            # No drain here: the broken-page layout is a centered modal so
-            # the banner has nowhere clean to sit. Changes stay queued and
-            # surface the next time the scoring or summary page renders.
-            return render_template("broken.html", broken=broken)
         config_changes = drain_changes()
         container_exists = container_is_running(container_name)
         if setup_status_now == "error":
@@ -445,9 +438,7 @@ def create_app(
             initial_section = "container-ready"
         else:
             initial_section = "container-idle"
-        # Running and filtered entries can't be scored from here, so they
-        # don't belong in the progress bar — exclude them from the total.
-        scorable_total = sum(1 for s in queue if s["status"] not in ("running", "ignored"))
+        scorable_total = len(queue)
         queue_done = sum(1 for s in queue if s["status"] == "done")
         queue_skipped = sum(1 for s in queue if s["status"] == "skipped")
         return render_template(
@@ -461,7 +452,7 @@ def create_app(
             queue_done=queue_done,
             queue_skipped=queue_skipped,
             queue_total=scorable_total,
-            show_queue_progress=mode in ("queue",) and len(queue) > 1,
+            show_queue_progress=mode == "queue" and len(queue) > 1,
             current_idx=current_idx,
             mode=mode,
             hawk=False,
@@ -573,7 +564,7 @@ def create_app(
             result = dict(state["setup_state"])
             container_name = state["container_name"]
             queue = list(state["queue"])
-            if state["mode"] in ("queue",):
+            if state["mode"] == "queue":
                 result["queue"] = {
                     "current": state["current_idx"] + 1,
                     "total": len(queue),
@@ -766,9 +757,7 @@ def create_app(
             has_next = next_pending_index(state["queue"], state["current_idx"]) is not None
             queue_done = sum(1 for s in state["queue"] if s["status"] == "done")
             queue_skipped = sum(1 for s in state["queue"] if s["status"] == "skipped")
-            scorable_total = sum(
-                1 for s in state["queue"] if s["status"] not in ("running", "ignored")
-            )
+            scorable_total = len(state["queue"])
         return jsonify(
             success=True,
             has_next=has_next,
@@ -850,27 +839,21 @@ def create_app(
         )
 
     def advance_response() -> ResponseReturnValue:
-        """Run advance_fn and translate its result into a JSON response.
-
-        ``"broken"`` returns ``reload=True`` so the frontend re-fetches ``/``,
-        which then renders ``broken.html`` (state-driven, refresh-safe).
-        """
+        """Run advance_fn and translate its result into a JSON response."""
         result = advance_fn()
         if result == "exhausted":
             return jsonify(success=False, done=True)
-        if result == "broken":
-            return jsonify(success=False, reload=True)
         return jsonify(success=True)
 
     @app.route("/api/next", methods=["POST"])
     def next_sample() -> ResponseReturnValue:
-        if state["mode"] not in ("queue",):
+        if state["mode"] != "queue":
             return jsonify(success=False, error="Not in queue mode"), 400
         return advance_response()
 
     @app.route("/api/skip", methods=["POST"])
     def skip_sample() -> ResponseReturnValue:
-        if state["mode"] not in ("queue",):
+        if state["mode"] != "queue":
             return jsonify(success=False, error="Not in queue mode"), 400
         with lock:
             uuid = state["queue"][state["current_idx"]]["uuid"]
@@ -1011,17 +994,6 @@ def create_app(
             save_fn(state)
         return jsonify(success=True)
 
-    @app.route("/api/skip-broken", methods=["POST"])
-    def skip_broken() -> ResponseReturnValue:
-        """Record a metadata-fetch failure as a skip and try the next sample."""
-        if state["mode"] not in ("queue",):
-            return jsonify(success=False, error="Not in queue mode"), 400
-        data = request.get_json()
-        if not isinstance(data, dict) or "uuid" not in data or "error" not in data:
-            return jsonify(success=False, error="Missing uuid or error"), 400
-        mark_broken_skipped_fn(str(data["uuid"]), str(data["error"]))
-        return advance_response()
-
     @app.route("/summary")
     def summary() -> ResponseReturnValue:
         with lock:
@@ -1036,7 +1008,7 @@ def create_app(
             queue=queue,
             mode=mode,
             current_idx=current_idx,
-            can_navigate=mode in ("queue",),
+            can_navigate=mode == "queue",
             updated_at=updated_at,
             pending_session_count=0,
             pending_all_count=0,
@@ -1048,7 +1020,7 @@ def create_app(
 
     @app.route("/api/navigate", methods=["POST"])
     def navigate() -> ResponseReturnValue:
-        if state["mode"] not in ("queue",):
+        if state["mode"] != "queue":
             return jsonify(success=False, error="Not in queue mode"), 400
         data = request.get_json()
         if not isinstance(data, dict):
@@ -1073,13 +1045,6 @@ def create_app(
 
         if target == idx:
             return jsonify(success=True)
-
-        target_status = queue[target]["status"]
-        if target_status == "running":
-            return jsonify(
-                success=False,
-                error="Sample is still running; can't navigate to it yet.",
-            ), 400
 
         target_uuid = queue[target]["uuid"]
 

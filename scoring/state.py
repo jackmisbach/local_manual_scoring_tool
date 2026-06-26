@@ -9,7 +9,7 @@ from typing import Any, Literal, NotRequired, TypedDict, cast
 
 from scoring.store import TrackedSample
 
-AdvanceResult = Literal["advanced", "exhausted", "broken"]
+AdvanceResult = Literal["advanced", "exhausted"]
 
 logger = logging.getLogger(__name__)
 
@@ -25,12 +25,10 @@ QueueStatus = Literal[
     "skipped",
     "scored",
     "done",
-    "running",
-    "ignored",
 ]
 
 # Statuses "Next Sample" advances to. ``done`` and ``skipped`` are not navigable
-# (the user already finished/skipped them); ``running``/``ignored`` are synthetic.
+# (the user already finished/skipped them).
 NAVIGABLE_STATUSES: frozenset[str] = frozenset({"open", "scored"})
 
 
@@ -47,14 +45,6 @@ class QueueEntry(TypedDict):
     minutes_to_score: NotRequired[float]
     has_stash: NotRequired[bool]
     error: NotRequired[str]
-
-
-class BrokenSample(TypedDict):
-    """A sample whose metadata could not be loaded; user must Skip or Exit."""
-
-    uuid: str
-    task_name: str
-    error: str
 
 
 class SetupState(TypedDict):
@@ -141,7 +131,6 @@ class ScoringState(TypedDict):
     # the sample dirs, plus per-task sample counts.
     all_tasks: list[str]
     task_counts: dict[str, int]
-    pending_broken: NotRequired[BrokenSample]
     # Set when startup found nothing to score; the app redirects to /summary.
     pending_summary: NotRequired[bool]
     # Set when at least one task is unrecorded in the local selection file; the
