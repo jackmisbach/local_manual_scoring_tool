@@ -69,25 +69,11 @@
             .status-scored {
                 color: #1d4ed8;
             }
-            .status-pending_score {
-                color: #d97706;
-            }
-            .status-pending_done {
-                color: #b45309;
-            }
             .status-skipped {
                 color: #92400e;
             }
             .status-open {
                 color: #6b7280;
-            }
-            .status-running {
-                color: #7c3aed;
-                font-style: italic;
-            }
-            .status-ignored {
-                color: #94a3b8;
-                font-style: italic;
             }
             .score {
                 font-weight: 600;
@@ -100,14 +86,6 @@
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap;
-            }
-            .error-explanation {
-                color: #b45309;
-                font-style: italic;
-            }
-            .error-explanation::before {
-                content: "error: ";
-                font-weight: 600;
             }
             .date {
                 font-size: 0.8em;
@@ -281,30 +259,19 @@
 
         {% set done = queue | selectattr("status", "equalto", "done") | list %}
         {% set scored_only = queue | selectattr("status", "equalto", "scored") | list %}
-        {% set pending_score = queue | selectattr("status", "equalto", "pending_score") | list %}
-        {% set pending_done = queue | selectattr("status", "equalto", "pending_done") | list %}
         {% set skipped = queue | selectattr("status", "equalto", "skipped") | list %}
-        {% set running = queue | selectattr("status", "equalto", "running") | list %}
-        {% set ignored = queue | selectattr("status", "equalto", "ignored") | list %}
         {% set open_samples = queue | selectattr("status", "equalto", "open") | list %}
         {% set stashed = queue | selectattr("has_stash", "defined") | list %}
-        {% set errored = skipped | selectattr("error", "defined") | list %}
-        {% set submitted = scored_only + pending_score + pending_done + done %}
+        {% set submitted = scored_only + done %}
         {% set scores = submitted | map(attribute="score") | select("number") | list %}
         <div class="stats">
             <span><strong>Total:</strong> {{ queue | length }}</span>
             <span><strong>Open:</strong> {{ open_samples | length }}</span>
             <span><strong>Scored:</strong> {{ submitted | length }}</span>
-            {% if done or pending_done %}
-            <span><strong>Done:</strong> {{ done | length + pending_done | length }}</span>
+            {% if done %}
+            <span><strong>Done:</strong> {{ done | length }}</span>
             {% endif %}
-            <span><strong>Skipped:</strong> {{ skipped | length }}{% if errored %} ({{ errored | length }} due to errors){% endif %}</span>
-            {% if running %}
-            <span><strong>Running:</strong> {{ running | length }}</span>
-            {% endif %}
-            {% if ignored %}
-            <span><strong>Ignored:</strong> {{ ignored | length }}</span>
-            {% endif %}
+            <span><strong>Skipped:</strong> {{ skipped | length }}</span>
             {% if scores %}
             <span><strong>Mean score:</strong> {{ "%.2f" | format(scores | sum / scores | length) }}</span>
             {% endif %}
@@ -314,18 +281,12 @@
             <button type="button" class="filter-chip active" data-filter="all">All</button>
             <button type="button" class="filter-chip" data-filter="open">Open</button>
             <button type="button" class="filter-chip" data-filter="scored">Scored</button>
-            {% if done or pending_done %}
-            <button type="button" class="filter-chip" data-filter="done">Done ({{ done | length + pending_done | length }})</button>
+            {% if done %}
+            <button type="button" class="filter-chip" data-filter="done">Done ({{ done | length }})</button>
             {% endif %}
             <button type="button" class="filter-chip" data-filter="skipped">Skipped</button>
             {% if stashed %}
             <button type="button" class="filter-chip" data-filter="stashed">Stashed ({{ stashed | length }})</button>
-            {% endif %}
-            {% if running %}
-            <button type="button" class="filter-chip" data-filter="running">Running</button>
-            {% endif %}
-            {% if ignored %}
-            <button type="button" class="filter-chip" data-filter="ignored">Ignored</button>
             {% endif %}
             <input type="text" class="filter-search" id="filter-search" placeholder="Search task / sample / explanation..." />
         </div>
@@ -360,16 +321,12 @@
                     data-minutes="{{ s.minutes_to_score if s.minutes_to_score is defined and s.minutes_to_score is not none else '' }}"
                     data-status-sort="{{ s.status }}"
                     data-date="{{ ts }}"
-                    data-search="{{ (s.uuid ~ ' ' ~ (s.sample_id or '') ~ ' ' ~ s.task_name ~ ' ' ~ (s.explanation if s.explanation is defined else '') ~ ' ' ~ (s.error if s.error is defined else '')) | lower }}"
+                    data-search="{{ (s.uuid ~ ' ' ~ (s.sample_id or '') ~ ' ' ~ s.task_name ~ ' ' ~ (s.explanation if s.explanation is defined else '')) | lower }}"
                 >
                     <td>{{ loop.index }}</td>
                     <td><code class="guid-copy" title="Click to copy {{ s.uuid }}" data-guid="{{ s.uuid }}">{{ s.uuid[:8] }}</code></td>
                     <td>
-                        {% if s.status == "running" and s.viewer_url %}
-                        <a class="back-link" href="{{ s.viewer_url }}" target="_blank" rel="noopener">
-                            {{ s.sample_id[:60] if s.sample_id else s.task_name }}
-                        </a>
-                        {% elif can_navigate %}
+                        {% if can_navigate %}
                         <button type="button" class="back-link" onclick="navigateTo({{ loop.index0 }})">
                             {{ s.sample_id[:60] if s.sample_id else s.task_name }}
                         </button>
@@ -382,13 +339,9 @@
                     <td>{{ s.minutes_to_score if s.minutes_to_score is defined and s.minutes_to_score is not none else '—' }}</td>
                     <td class="status-{{ s.status }}">{{ s.status.replace("_", " ") }}</td>
                     <td class="date" title="{{ ts }}">{{ (ts[:10] ~ ' ' ~ ts[11:16]) if ts else '—' }}</td>
-                    {% if s.error is defined %}
-                    <td class="explanation error-explanation" title="{{ s.error }}">{{ s.error[:80] }}</td>
-                    {% else %}
                     <td class="explanation" title="{{ s.explanation if s.explanation is defined else '' }}">
                         {{ s.explanation[:80] if s.explanation is defined and s.explanation else '' }}
                     </td>
-                    {% endif %}
                 </tr>
                 {% endfor %}
             </tbody>
@@ -405,21 +358,14 @@
                 const term = searchInput.value.trim().toLowerCase();
                 tbody.querySelectorAll("tr").forEach(tr => {
                     // "stashed" is orthogonal to the scoring-status enum.
-                    // Virtual filters: "scored" covers any row with a score
-                    // (scored/pending_score/pending_done/done); "done"
-                    // covers user-finished rows (done + pending_done).
+                    // Virtual filter: "scored" covers any row with a score
+                    // (scored or user-finished done).
                     const status = tr.dataset.status;
                     const matchesStatus =
                         activeFilter === "all"
                         || (activeFilter === "stashed" && tr.dataset.hasStash === "1")
                         || (activeFilter === "scored" && (
-                            status === "scored"
-                            || status === "pending_score"
-                            || status === "pending_done"
-                            || status === "done"
-                        ))
-                        || (activeFilter === "done" && (
-                            status === "done" || status === "pending_done"
+                            status === "scored" || status === "done"
                         ))
                         || status === activeFilter;
                     const matchesSearch =

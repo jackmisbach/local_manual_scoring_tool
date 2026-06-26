@@ -21,15 +21,8 @@ Status taxonomy (shared between the store and the in-memory queue):
 
 - ``open`` — sample is set up for scoring but the user hasn't acted yet.
 - ``scored`` — at least one history entry exists.
-- ``pending_score`` / ``pending_done`` — kept for compatibility with the
-  upstream tracking model; in local mode every entry is born ``submitted_to:
-  "local"`` so a finalized sample reads as ``scored`` (or ``done`` once the user
-  clicks "Done Scoring").
 - ``done`` — user clicked "Done Scoring This Sample".
 - ``skipped`` — user actively skipped.
-
-Two extra values exist only on synthetic queue entries (never persisted):
-``running`` and ``ignored``.
 """
 
 import json
@@ -356,7 +349,7 @@ def load_score_file(root: Path, uuid: str) -> ScoreFile | None:
     """Read the working/UI state for ``uuid``.
 
     Returns ``None`` when the sample has no record, or only a bare tracking row
-    with no score/UI content (mirrors the upstream "missing _score.json" case).
+    with no score/UI content.
     """
     rec = _load_records(root).get(uuid)
     if rec is None:
@@ -478,11 +471,6 @@ def save_timer_state(root: Path, uuid: str, state: TimerState | None) -> None:
 # ---------------------------------------------------------------------------
 
 _scores_lock = threading.Lock()
-
-
-def score_path(root: Path) -> Path:
-    """Filesystem path of the canonical scores export."""
-    return scores_path(root)
 
 
 def append_score_jsonl(root: Path, uuid: str, entry: SavedScore, info: dict[str, Any]) -> Path:
@@ -738,10 +726,8 @@ def queue_summary_fields(score_file: ScoreFile | None) -> dict[str, Any]:
 def derive_status_from_score_file(score_file: ScoreFile | None, fallback: Status) -> Status:
     """Pick the tracking status implied by a score file's current contents.
 
-    Local semantics: there is no "pending push to Hawk" concept, so a sample is
-    ``done`` once the user clicks Done Scoring, ``scored`` once any history entry
-    exists, else the caller's ``fallback`` (typically ``open``). The
-    ``pending_score`` / ``pending_done`` statuses are never produced here.
+    A sample is ``done`` once the user clicks Done Scoring, ``scored`` once any
+    history entry exists, else the caller's ``fallback`` (typically ``open``).
     """
     if score_file is None:
         return fallback
