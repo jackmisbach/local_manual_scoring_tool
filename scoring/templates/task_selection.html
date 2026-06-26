@@ -1,0 +1,310 @@
+<!doctype html>
+<html>
+    <head>
+        <title>Select tasks to score</title>
+        <style>
+            * {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+            }
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                min-height: 100vh;
+                background: #f8f9fa;
+                color: #333;
+                padding: 20px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .modal {
+                background: white;
+                border-radius: 8px;
+                max-width: 640px;
+                width: 100%;
+                padding: 24px 28px;
+                box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+            }
+            .modal h2 {
+                font-size: 1.25em;
+                margin-bottom: 6px;
+                color: #1f2937;
+            }
+            .modal .subtitle {
+                font-size: 0.9em;
+                color: #6b7280;
+                margin-bottom: 16px;
+            }
+            .toolbar {
+                display: flex;
+                gap: 8px;
+                align-items: center;
+                margin-bottom: 12px;
+                font-size: 0.85em;
+                flex-wrap: wrap;
+            }
+            .toolbar button {
+                background: #f3f4f6;
+                border: 1px solid #d1d5db;
+                color: #374151;
+                padding: 4px 10px;
+                border-radius: 6px;
+                font-size: 0.85em;
+                cursor: pointer;
+                font-family: inherit;
+            }
+            .toolbar button:hover {
+                background: #e5e7eb;
+            }
+            .toolbar .count {
+                margin-left: auto;
+                color: #6b7280;
+            }
+            .task-list {
+                max-height: 50vh;
+                overflow-y: auto;
+                border: 1px solid #e5e7eb;
+                border-radius: 6px;
+                padding: 4px 0;
+                margin-bottom: 16px;
+            }
+            .task-row {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                padding: 8px 14px;
+                cursor: pointer;
+                user-select: none;
+                border-bottom: 1px solid #f3f4f6;
+            }
+            .task-row:last-child {
+                border-bottom: none;
+            }
+            .task-row:hover {
+                background: #f9fafb;
+            }
+            .task-row.unseen {
+                background: #fef9c3;
+            }
+            .task-row.unseen:hover {
+                background: #fef08a;
+            }
+            .task-row input[type="checkbox"] {
+                width: 16px;
+                height: 16px;
+                cursor: pointer;
+            }
+            .task-row .name {
+                flex: 1;
+                font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+                font-size: 0.88em;
+            }
+            .task-row .count {
+                color: #6b7280;
+                font-size: 0.8em;
+            }
+            .actions {
+                display: flex;
+                gap: 8px;
+                justify-content: flex-end;
+            }
+            /* Shared palette (primary + outline). Mirrors broken.html. */
+            :root {
+                --btn-primary: #2563eb;
+            }
+            .actions button {
+                padding: 8px 18px;
+                border-radius: 6px;
+                border: 1px solid #d1d5db;
+                background: white;
+                color: #1f2937;
+                cursor: pointer;
+                font-size: 0.9em;
+                font-family: inherit;
+                transition: filter 0.12s, opacity 0.12s, background 0.12s;
+            }
+            .actions button.primary {
+                background: var(--btn-primary);
+                border-color: var(--btn-primary);
+                color: white;
+            }
+            .actions button.primary:not(:disabled):hover {
+                filter: brightness(0.92);
+            }
+            .actions button:not(.primary):not(:disabled):hover {
+                background: #f3f4f6;
+            }
+            .actions button:disabled {
+                opacity: 0.55;
+                cursor: not-allowed;
+            }
+            .error {
+                background: #fee2e2;
+                border: 1px solid #fca5a5;
+                color: #991b1b;
+                padding: 8px 12px;
+                border-radius: 4px;
+                margin-bottom: 12px;
+                font-size: 0.85em;
+                display: none;
+                align-items: flex-start;
+                gap: 12px;
+            }
+            .error .error-text {
+                flex: 1;
+            }
+            .btn-close {
+                background: transparent;
+                color: inherit;
+                border: none;
+                padding: 2px 8px;
+                font-size: 1.2em;
+                line-height: 1;
+                cursor: pointer;
+                font-family: inherit;
+                border-radius: 4px;
+            }
+            .btn-close:not(:disabled):hover {
+                background: rgba(0, 0, 0, 0.08);
+                filter: none;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="modal" role="dialog" aria-modal="true">
+            <h2>Select tasks to score</h2>
+            <p class="subtitle">
+                Pick which tasks to include in the scoring queue. Deselected tasks aren't queued and no artifacts are
+                downloaded for them.
+            </p>
+            <p class="subtitle">
+                Your choice persists in <code>config.json</code>. Change it later from the footer's Tasks button, by
+                editing <code>config.json</code> directly, or by running <code>manual-score config edit</code>.
+            </p>
+
+            <div id="error" class="error">
+                <span id="error-text" class="error-text"></span>
+                <button type="button" class="btn-close" title="Dismiss" aria-label="Dismiss"
+                    onclick="document.getElementById('error').style.display='none'">&times;</button>
+            </div>
+
+            <div class="toolbar">
+                <button type="button" id="select-all">Select all</button>
+                <button type="button" id="deselect-all">Deselect all</button>
+                <span class="count" id="count">0 of 0 selected</span>
+            </div>
+
+            <div class="task-list" id="task-list">
+                <p style="padding: 16px; color: #6b7280; font-size: 0.9em">Loading tasks...</p>
+            </div>
+
+            <div class="actions">
+                <button type="button" id="cancel-btn" {% if standalone %}style="display:none"{% endif %} onclick="goBack()">Cancel</button>
+                <button type="button" class="primary" id="save-btn" onclick="saveSelection()">Save &amp; continue</button>
+            </div>
+        </div>
+
+        <script>
+            const STANDALONE = {{ 'true' if standalone else 'false' }};
+            let TASKS = [];
+
+            async function loadTasks() {
+                const resp = await fetch("/api/tasks");
+                const data = await resp.json();
+                TASKS = (data.tasks || []).map(t => ({...t}));
+                renderTasks();
+            }
+
+            function renderTasks() {
+                const list = document.getElementById("task-list");
+                if (TASKS.length === 0) {
+                    list.innerHTML = '<p style="padding: 16px; color: #6b7280; font-size: 0.9em">No tasks found.</p>';
+                    updateCount();
+                    return;
+                }
+                const unseenSet = new Set(TASKS.filter(t => t.unseen).map(t => t.name));
+                list.innerHTML = TASKS.map((t, i) => {
+                    const cls = "task-row" + (t.unseen ? " unseen" : "");
+                    const checked = t.selected ? "checked" : "";
+                    return (
+                        '<label class="' + cls + '" data-index="' + i + '">' +
+                        '<input type="checkbox" data-name="' + escapeAttr(t.name) + '" ' + checked + ' />' +
+                        '<span class="name">' + escapeHtml(t.name) + '</span>' +
+                        '<span class="count">' + t.sample_count + ' sample' + (t.sample_count === 1 ? '' : 's') + '</span>' +
+                        '</label>'
+                    );
+                }).join("");
+                list.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                    cb.addEventListener("change", () => {
+                        const name = cb.dataset.name;
+                        const task = TASKS.find(t => t.name === name);
+                        if (task) task.selected = cb.checked;
+                        updateCount();
+                    });
+                });
+                updateCount();
+            }
+
+            function escapeHtml(s) {
+                return String(s).replace(/[&<>"']/g, c => (
+                    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+                ));
+            }
+            function escapeAttr(s) { return escapeHtml(s).replace(/"/g, '&quot;'); }
+
+            function updateCount() {
+                const total = TASKS.length;
+                const selected = TASKS.filter(t => t.selected).length;
+                document.getElementById("count").textContent = selected + " of " + total + " selected";
+                document.getElementById("save-btn").disabled = false;
+            }
+
+            document.getElementById("select-all").addEventListener("click", () => {
+                TASKS.forEach(t => t.selected = true);
+                renderTasks();
+            });
+            document.getElementById("deselect-all").addEventListener("click", () => {
+                TASKS.forEach(t => t.selected = false);
+                renderTasks();
+            });
+
+            async function saveSelection() {
+                const btn = document.getElementById("save-btn");
+                const err = document.getElementById("error");
+                const errText = document.getElementById("error-text");
+                err.style.display = "none";
+                btn.disabled = true;
+                btn.textContent = "Saving...";
+                const body = { tasks: Object.fromEntries(TASKS.map(t => [t.name, !!t.selected])) };
+                try {
+                    const resp = await fetch("/api/tasks", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(body),
+                    });
+                    const data = await resp.json();
+                    if (!data.success) {
+                        errText.textContent = data.error || "Unknown error";
+                        err.style.display = "flex";
+                        btn.disabled = false;
+                        btn.textContent = "Save & continue";
+                        return;
+                    }
+                    window.location.href = "/";
+                } catch (e) {
+                    errText.textContent = e.message;
+                    err.style.display = "flex";
+                    btn.disabled = false;
+                    btn.textContent = "Save & continue";
+                }
+            }
+
+            function goBack() {
+                window.location.href = "/";
+            }
+
+            loadTasks();
+        </script>
+    </body>
+</html>

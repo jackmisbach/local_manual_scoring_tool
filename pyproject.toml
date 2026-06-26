@@ -1,0 +1,148 @@
+[project]
+name = "local-manual-scoring-tool"
+version = "0.1.0"
+description = "Local web UI for manually scoring agent runs that are already staged on disk (no Hawk/AWS)."
+requires-python = ">=3.11"
+dependencies = ["flask>=3.0.0", "markdown-it-py>=3.0.0"]
+
+[project.scripts]
+local-manual-score = "scoring.__main__:main"
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["scoring"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+indent-width = 4
+# Adds to ruff's built-in default excludes (.venv, build, dist, node_modules, ...).
+extend-exclude = ["data", "local", "tmp", "dev"]
+
+[tool.ruff.lint]
+# See rules here: https://docs.astral.sh/ruff/rules/
+select = [
+    "A",
+    "ANN",
+    "ARG",
+    "B",
+    "C4",
+    "COM",
+    "D",
+    "DTZ",
+    "E",
+    "F",
+    "FLY",
+    "FURB",
+    "G",
+    "I",
+    "ICN",
+    "INP",
+    "ISC",
+    "LOG",
+    "N",
+    "PERF",
+    "PGH",
+    "PIE",
+    "PLC",
+    "PLE",
+    "PLW",
+    "PT",
+    "PTH",
+    "PYI",
+    "Q",
+    "RET",
+    "RSE",
+    "RUF",
+    "S",
+    "SIM",
+    "SLF",
+    "T20",
+    "TID",
+    "TRY",
+    "UP",
+    "W",
+    "YTT",
+]
+ignore = [
+    "COM812",
+    "COM819",
+    "D100",
+    "D101",
+    "D102",
+    "D103",
+    "D104",
+    "D105",
+    "D106",
+    "D107",
+    "D205",
+    "DTZ005",
+    "E501",
+    "F401",
+    "Q003",
+    "Q004",
+    "S101",
+    "S311",
+    "S603",
+    "S606",
+    "S607",
+    "T201",
+    "TRY003",
+]
+unfixable = ["F401", "UP037"]
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.lint.flake8-annotations]
+allow-star-arg-any = true
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"dev/**" = ["INP001"]
+"tests/**" = ["ARG001", "SLF001"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "lf"
+docstring-code-format = false
+docstring-code-line-length = "dynamic"
+
+[tool.pyright]
+exclude = ["**/.*", "**/__pycache__", "**/node_modules", "local", "data", "tmp", "dev"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+
+# Silence upstream / untyped-API noise
+reportAny = false
+reportExplicitAny = false
+reportMissingParameterType = false
+reportMissingTypeStubs = false
+reportUnknownArgumentType = false
+reportUnknownMemberType = false
+reportUnknownParameterType = false
+reportUnknownVariableType = false
+
+# Mirrors METR/harder-tasks
+reportUnusedCallResult = false
+reportUnannotatedClassAttribute = false
+reportImplicitOverride = "warning"
+reportImplicitStringConcatenation = false
+reportMissingImports = "warning"
+reportMissingTypeArgument = "warning"
+reportUnusedFunction = "warning"  # Flask @app.route handlers are registered, not called
+reportUnusedParameter = "warning"

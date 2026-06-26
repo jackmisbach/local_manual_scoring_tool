@@ -1,0 +1,22 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.specstory/
+.vscode/
+.cursorindexingignore
+
+# Per-user config (gitignored; seeded on first run)
+config.json
+
+# Local scoring data: project dirs, staged images, and scoring output
+data/
+*.tar
+
+# Logs / scratch
+logs/
+tmp/
+local/

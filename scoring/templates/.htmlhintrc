@@ -1,0 +1,6 @@
+{
+    "_comment": "htmlhint doesn't understand Jinja2. {% ... %} reads as duplicate attributes, and JS comparisons inside <script> blocks (< / >) trip spec-char-escape, which then desyncs tag-pair. Disable those three rules in this directory only; real HTML elsewhere in the repo keeps full coverage.",
+    "attr-no-duplication": false,
+    "spec-char-escape": false,
+    "tag-pair": false
+}

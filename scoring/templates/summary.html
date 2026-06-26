@@ -1,0 +1,593 @@
+<!doctype html>
+<html>
+    <head>
+        <title>Scoring Summary</title>
+        <style>
+            * {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+            }
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                padding: 20px;
+                background: #f8f9fa;
+                color: #333;
+            }
+            h1 {
+                font-size: 1.4em;
+                margin-bottom: 16px;
+            }
+            table {
+                width: 100%;
+                border-collapse: collapse;
+                background: white;
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                overflow: hidden;
+            }
+            th {
+                background: #f1f5f9;
+                text-align: left;
+                padding: 10px 14px;
+                font-size: 0.85em;
+                color: #475569;
+                border-bottom: 2px solid #e2e8f0;
+                white-space: nowrap;
+            }
+            th.sortable {
+                cursor: pointer;
+                user-select: none;
+            }
+            th.sortable:hover {
+                background: #e2e8f0;
+            }
+            th.sortable::after {
+                content: " \2195";
+                color: #cbd5e1;
+                font-size: 0.85em;
+            }
+            th.sort-asc::after {
+                content: " \2191";
+                color: #2563eb;
+            }
+            th.sort-desc::after {
+                content: " \2193";
+                color: #2563eb;
+            }
+            td {
+                padding: 10px 14px;
+                border-bottom: 1px solid #f1f5f9;
+                font-size: 0.9em;
+            }
+            tr:last-child td {
+                border-bottom: none;
+            }
+            .status-done {
+                color: #065f46;
+            }
+            .status-scored {
+                color: #1d4ed8;
+            }
+            .status-pending_score {
+                color: #d97706;
+            }
+            .status-pending_done {
+                color: #b45309;
+            }
+            .status-skipped {
+                color: #92400e;
+            }
+            .status-open {
+                color: #6b7280;
+            }
+            .status-running {
+                color: #7c3aed;
+                font-style: italic;
+            }
+            .status-ignored {
+                color: #94a3b8;
+                font-style: italic;
+            }
+            .score {
+                font-weight: 600;
+                font-size: 1em;
+            }
+            .explanation {
+                font-size: 0.8em;
+                color: #666;
+                max-width: 300px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .error-explanation {
+                color: #b45309;
+                font-style: italic;
+            }
+            .error-explanation::before {
+                content: "error: ";
+                font-weight: 600;
+            }
+            .date {
+                font-size: 0.8em;
+                color: #666;
+                white-space: nowrap;
+            }
+            .stats {
+                background: white;
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                padding: 16px 20px;
+                margin-bottom: 16px;
+                display: flex;
+                gap: 24px;
+                font-size: 0.9em;
+                flex-wrap: wrap;
+            }
+            .stats strong {
+                color: #444;
+            }
+            .header-row {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 16px;
+                gap: 16px;
+                flex-wrap: wrap;
+            }
+            .header-row h1 {
+                margin: 0;
+            }
+            .back-link {
+                font-size: 0.9em;
+                color: #2563eb;
+                text-decoration: none;
+                cursor: pointer;
+                background: none;
+                border: none;
+                padding: 0;
+                font-family: inherit;
+                text-align: left;
+            }
+            .back-link:hover {
+                text-decoration: underline;
+            }
+            .header-actions {
+                display: flex;
+                gap: 12px;
+                align-items: center;
+            }
+            /* Shared palette + hover/disabled behavior (mirrors scoring.html). */
+            :root {
+                --btn-primary: #2563eb;
+                --btn-danger:  #dc2626;
+            }
+            .btn-danger,
+            .btn-primary {
+                color: white;
+                border: none;
+                padding: 6px 14px;
+                border-radius: 6px;
+                font-size: 0.85em;
+                cursor: pointer;
+                font-family: inherit;
+                transition: filter 0.12s, opacity 0.12s;
+            }
+            .btn-danger  { background: var(--btn-danger); }
+            .btn-primary { background: var(--btn-primary); }
+            .btn-danger:not(:disabled):hover,
+            .btn-primary:not(:disabled):hover {
+                filter: brightness(0.92);
+            }
+            .btn-danger:disabled,
+            .btn-primary:disabled {
+                opacity: 0.55;
+                cursor: not-allowed;
+            }
+            tr.row-current {
+                background: #eff6ff;
+            }
+            tr.row-current td:first-child::before {
+                content: "\25B6 ";
+                color: #2563eb;
+                font-weight: 700;
+            }
+            /* Subtle amber left edge marks samples with an unsubmitted draft;
+               works on top of row-current so a current + stashed sample
+               shows both cues. */
+            tr.row-has-stash td:first-child {
+                box-shadow: inset 4px 0 0 #f59e0b;
+            }
+            .filters {
+                background: white;
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                padding: 12px 20px;
+                margin-bottom: 16px;
+                display: flex;
+                gap: 8px;
+                align-items: center;
+                flex-wrap: wrap;
+            }
+            .filter-chip {
+                background: #f1f5f9;
+                border: 1px solid #cbd5e1;
+                color: #475569;
+                padding: 4px 12px;
+                border-radius: 999px;
+                font-size: 0.85em;
+                cursor: pointer;
+                font-family: inherit;
+            }
+            .filter-chip:hover {
+                background: #e2e8f0;
+            }
+            .filter-chip.active {
+                background: #2563eb;
+                border-color: #2563eb;
+                color: white;
+            }
+            .filter-search {
+                flex: 1;
+                min-width: 180px;
+                padding: 6px 10px;
+                border: 1px solid #cbd5e1;
+                border-radius: 6px;
+                font-size: 0.85em;
+                font-family: inherit;
+            }
+            tr.row-hidden {
+                display: none;
+            }
+            .guid-copy {
+                cursor: pointer;
+                padding: 2px 6px;
+                border-radius: 4px;
+                background: #f1f5f9;
+                color: #475569;
+                font-size: 0.85em;
+                user-select: all;
+            }
+            .guid-copy:hover {
+                background: #e2e8f0;
+                color: #1e293b;
+            }
+            .guid-copy.copied {
+                background: #bbf7d0;
+                color: #065f46;
+            }
+            {% include "_dialog_styles.css" %}
+            body.blinded .blind-hidden {
+                display: none !important;
+            }
+        </style>
+    </head>
+    <body class="blinded">
+        {% include "_config_changes.html" %}
+        <div class="header-row">
+            <h1>Sample list</h1>
+            <div class="header-actions">
+                {% if can_navigate and queue and not pending_summary %}
+                <button type="button" class="back-link" onclick="navigateTo({{ current_idx }})">
+                    &larr; Back to current sample (#{{ current_idx + 1 }})
+                </button>
+                {% elif not pending_summary %}
+                <a class="back-link" href="/">&larr; Back</a>
+                {% endif %}
+                {% if pending_session_count > 0 %}
+                <button type="button" class="btn-primary" id="push-session-btn" onclick="pushPending('session')">
+                    Push {{ pending_session_count }} from this session
+                </button>
+                {% endif %}
+                {% if pending_all_count > pending_session_count %}
+                <button type="button" class="btn-primary" id="push-all-btn" onclick="pushPending('all')">
+                    Push {{ pending_all_count }} from all pending
+                </button>
+                {% endif %}
+                <button type="button" class="btn-danger" id="exit-btn" onclick="exitTool()">Exit</button>
+            </div>
+        </div>
+
+        {% set done = queue | selectattr("status", "equalto", "done") | list %}
+        {% set scored_only = queue | selectattr("status", "equalto", "scored") | list %}
+        {% set pending_score = queue | selectattr("status", "equalto", "pending_score") | list %}
+        {% set pending_done = queue | selectattr("status", "equalto", "pending_done") | list %}
+        {% set skipped = queue | selectattr("status", "equalto", "skipped") | list %}
+        {% set running = queue | selectattr("status", "equalto", "running") | list %}
+        {% set ignored = queue | selectattr("status", "equalto", "ignored") | list %}
+        {% set open_samples = queue | selectattr("status", "equalto", "open") | list %}
+        {% set stashed = queue | selectattr("has_stash", "defined") | list %}
+        {% set errored = skipped | selectattr("error", "defined") | list %}
+        {% set pending_push = pending_score + pending_done %}
+        {% set submitted = scored_only + pending_score + pending_done + done %}
+        {% set scores = submitted | map(attribute="score") | select("number") | list %}
+        <div class="stats">
+            <span><strong>Total:</strong> {{ queue | length }}</span>
+            <span><strong>Open:</strong> {{ open_samples | length }}</span>
+            <span><strong>Scored:</strong> {{ submitted | length }}</span>
+            {% if done or pending_done %}
+            <span><strong>Done:</strong> {{ done | length + pending_done | length }}</span>
+            {% endif %}
+            {% if pending_push %}
+            <span><strong>Pending push:</strong> {{ pending_push | length }}</span>
+            {% endif %}
+            <span><strong>Skipped:</strong> {{ skipped | length }}{% if errored %} ({{ errored | length }} due to errors){% endif %}</span>
+            {% if running %}
+            <span><strong>Running:</strong> {{ running | length }}</span>
+            {% endif %}
+            {% if ignored %}
+            <span><strong>Ignored:</strong> {{ ignored | length }}</span>
+            {% endif %}
+            {% if scores %}
+            <span><strong>Mean score:</strong> {{ "%.2f" | format(scores | sum / scores | length) }}</span>
+            {% endif %}
+        </div>
+
+        <div class="filters">
+            <button type="button" class="filter-chip active" data-filter="all">All</button>
+            <button type="button" class="filter-chip" data-filter="open">Open</button>
+            <button type="button" class="filter-chip" data-filter="scored">Scored</button>
+            {% if done or pending_done %}
+            <button type="button" class="filter-chip" data-filter="done">Done ({{ done | length + pending_done | length }})</button>
+            {% endif %}
+            {% if pending_push %}
+            <button type="button" class="filter-chip" data-filter="pending">Pending push ({{ pending_push | length }})</button>
+            {% endif %}
+            <button type="button" class="filter-chip" data-filter="skipped">Skipped</button>
+            {% if stashed %}
+            <button type="button" class="filter-chip" data-filter="stashed">Stashed ({{ stashed | length }})</button>
+            {% endif %}
+            {% if running %}
+            <button type="button" class="filter-chip" data-filter="running">Running</button>
+            {% endif %}
+            {% if ignored %}
+            <button type="button" class="filter-chip" data-filter="ignored">Ignored</button>
+            {% endif %}
+            <input type="text" class="filter-search" id="filter-search" placeholder="Search task / sample / explanation..." />
+        </div>
+
+        <table id="summary-table">
+            <thead>
+                <tr>
+                    <th class="sortable" data-sort="index" data-type="number">#</th>
+                    <th class="sortable" data-sort="uuid" data-type="text">GUID</th>
+                    <th class="sortable" data-sort="task" data-type="text">Task</th>
+                    <th class="sortable blind-hidden" data-sort="model" data-type="text">Model</th>
+                    <th class="sortable" data-sort="score" data-type="number">Score</th>
+                    <th class="sortable" data-sort="minutes" data-type="number">Minutes</th>
+                    <th class="sortable" data-sort="status" data-type="text">Status</th>
+                    <th class="sortable" data-sort="date" data-type="text">Updated</th>
+                    <th>Explanation</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in queue %}
+                {% set ts = updated_at.get(s.uuid, '') %}
+                <tr
+                    class="{% if loop.index0 == current_idx %}row-current {% endif %}{% if s.has_stash %}row-has-stash{% endif %}"
+                    {% if s.has_stash %}title="Has an unsubmitted draft (stashed)"{% endif %}
+                    data-status="{{ s.status }}"
+                    data-has-stash="{{ '1' if s.has_stash else '' }}"
+                    data-index="{{ loop.index0 }}"
+                    data-uuid="{{ s.uuid }}"
+                    data-task="{{ (s.sample_id or s.task_name) | lower }}"
+                    data-model="{{ s.model | lower }}"
+                    data-score="{{ s.score if s.score is defined and s.score is not none else '' }}"
+                    data-minutes="{{ s.minutes_to_score if s.minutes_to_score is defined and s.minutes_to_score is not none else '' }}"
+                    data-status-sort="{{ s.status }}"
+                    data-date="{{ ts }}"
+                    data-search="{{ (s.uuid ~ ' ' ~ (s.sample_id or '') ~ ' ' ~ s.task_name ~ ' ' ~ (s.explanation if s.explanation is defined else '') ~ ' ' ~ (s.error if s.error is defined else '')) | lower }}"
+                >
+                    <td>{{ loop.index }}</td>
+                    <td><code class="guid-copy" title="Click to copy {{ s.uuid }}" data-guid="{{ s.uuid }}">{{ s.uuid[:8] }}</code></td>
+                    <td>
+                        {% if s.status == "running" and s.viewer_url %}
+                        <a class="back-link" href="{{ s.viewer_url }}" target="_blank" rel="noopener">
+                            {{ s.sample_id[:60] if s.sample_id else s.task_name }}
+                        </a>
+                        {% elif can_navigate %}
+                        <button type="button" class="back-link" onclick="navigateTo({{ loop.index0 }})">
+                            {{ s.sample_id[:60] if s.sample_id else s.task_name }}
+                        </button>
+                        {% else %}
+                        {{ s.sample_id[:60] if s.sample_id else s.task_name }}
+                        {% endif %}
+                    </td>
+                    <td class="blind-hidden">{{ s.model }}</td>
+                    <td class="score">{{ s.score if s.score is defined and s.score is not none else '—' }}</td>
+                    <td>{{ s.minutes_to_score if s.minutes_to_score is defined and s.minutes_to_score is not none else '—' }}</td>
+                    <td class="status-{{ s.status }}">{{ s.status.replace("_", " ") }}</td>
+                    <td class="date" title="{{ ts }}">{{ (ts[:10] ~ ' ' ~ ts[11:16]) if ts else '—' }}</td>
+                    {% if s.error is defined %}
+                    <td class="explanation error-explanation" title="{{ s.error }}">{{ s.error[:80] }}</td>
+                    {% else %}
+                    <td class="explanation" title="{{ s.explanation if s.explanation is defined else '' }}">
+                        {{ s.explanation[:80] if s.explanation is defined and s.explanation else '' }}
+                    </td>
+                    {% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <script>
+            const table = document.getElementById("summary-table");
+            const tbody = table.querySelector("tbody");
+            const searchInput = document.getElementById("filter-search");
+            let activeFilter = "all";
+            let activeSort = { key: null, dir: null };
+
+            function applyFilters() {
+                const term = searchInput.value.trim().toLowerCase();
+                tbody.querySelectorAll("tr").forEach(tr => {
+                    // "stashed" is orthogonal to the scoring-status enum.
+                    // Virtual filters: "scored" covers any row with a score
+                    // (scored/pending_score/pending_done/done); "done"
+                    // covers user-finished rows (done + pending_done);
+                    // "pending" covers anything that needs pushing
+                    // (pending_score + pending_done).
+                    const status = tr.dataset.status;
+                    const matchesStatus =
+                        activeFilter === "all"
+                        || (activeFilter === "stashed" && tr.dataset.hasStash === "1")
+                        || (activeFilter === "scored" && (
+                            status === "scored"
+                            || status === "pending_score"
+                            || status === "pending_done"
+                            || status === "done"
+                        ))
+                        || (activeFilter === "done" && (
+                            status === "done" || status === "pending_done"
+                        ))
+                        || (activeFilter === "pending" && (
+                            status === "pending_score" || status === "pending_done"
+                        ))
+                        || status === activeFilter;
+                    const matchesSearch =
+                        !term || (tr.dataset.search || "").includes(term);
+                    tr.classList.toggle("row-hidden", !(matchesStatus && matchesSearch));
+                });
+            }
+
+            document.querySelectorAll(".filter-chip").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    document.querySelectorAll(".filter-chip").forEach(b => b.classList.remove("active"));
+                    btn.classList.add("active");
+                    activeFilter = btn.dataset.filter;
+                    applyFilters();
+                });
+            });
+
+            searchInput.addEventListener("input", applyFilters);
+
+            tbody.addEventListener("click", async ev => {
+                const cell = ev.target.closest(".guid-copy");
+                if (!cell) return;
+                ev.stopPropagation();
+                const guid = cell.dataset.guid;
+                try {
+                    await navigator.clipboard.writeText(guid);
+                } catch {
+                    const range = document.createRange();
+                    range.selectNodeContents(cell);
+                    const sel = window.getSelection();
+                    sel.removeAllRanges();
+                    sel.addRange(range);
+                    document.execCommand("copy");
+                    sel.removeAllRanges();
+                }
+                const originalText = cell.textContent;
+                cell.classList.add("copied");
+                cell.textContent = "copied!";
+                setTimeout(() => {
+                    cell.classList.remove("copied");
+                    cell.textContent = originalText;
+                }, 900);
+            });
+
+            function compareValues(a, b, type) {
+                if (type === "number") {
+                    const an = a === "" ? Number.POSITIVE_INFINITY : parseFloat(a);
+                    const bn = b === "" ? Number.POSITIVE_INFINITY : parseFloat(b);
+                    return an - bn;
+                }
+                return a.localeCompare(b);
+            }
+
+            document.querySelectorAll("th.sortable").forEach(th => {
+                th.addEventListener("click", () => {
+                    const key = th.dataset.sort;
+                    const type = th.dataset.type;
+                    let dir = "asc";
+                    if (activeSort.key === key) {
+                        dir = activeSort.dir === "asc" ? "desc" : "asc";
+                    }
+                    activeSort = { key, dir };
+
+                    document.querySelectorAll("th.sortable").forEach(other => {
+                        other.classList.remove("sort-asc", "sort-desc");
+                    });
+                    th.classList.add(dir === "asc" ? "sort-asc" : "sort-desc");
+
+                    const attr = key === "status" ? "statusSort" : key;
+                    const rows = Array.from(tbody.querySelectorAll("tr"));
+                    rows.sort((ra, rb) => {
+                        const cmp = compareValues(
+                            ra.dataset[attr] || "",
+                            rb.dataset[attr] || "",
+                            type,
+                        );
+                        return dir === "asc" ? cmp : -cmp;
+                    });
+                    rows.forEach(r => tbody.appendChild(r));
+                });
+            });
+
+            async function exitTool() {
+                if (!confirm("Stop containers and exit?")) return;
+                const btn = document.getElementById("exit-btn");
+                btn.disabled = true;
+                btn.textContent = "Exiting...";
+                try {
+                    await fetch("/api/exit", { method: "POST" });
+                } catch {}
+                document.body.innerHTML = '<p style="padding: 40px; text-align: center; color: #666">Scoring tool stopped. You can close this tab.</p>';
+            }
+
+            async function pushPending(scope) {
+                const btnId = scope === "session" ? "push-session-btn" : "push-all-btn";
+                const btn = document.getElementById(btnId);
+                if (!btn) return;
+                const originalLabel = btn.textContent;
+                btn.disabled = true;
+                btn.textContent = "Pushing...";
+                try {
+                    const resp = await fetch("/api/push-all-pending", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ scope }),
+                    });
+                    const data = await resp.json();
+                    if (resp.status === 503) {
+                        alert(data.error || "Push disabled.");
+                        btn.disabled = false;
+                        btn.textContent = originalLabel;
+                        return;
+                    }
+                    if (data.success) {
+                        window.location.reload();
+                        return;
+                    }
+                    const failureSummary = (data.failures || [])
+                        .map(f => `${f.uuid.slice(0, 8)}: ${f.error}`)
+                        .join("\n");
+                    alert("Push completed with failures:\n" + failureSummary);
+                    window.location.reload();
+                } catch (err) {
+                    alert("Error: " + err.message);
+                    btn.disabled = false;
+                    btn.textContent = originalLabel;
+                }
+            }
+
+            async function navigateTo(index) {
+                try {
+                    const resp = await fetch("/api/navigate", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ index }),
+                    });
+                    const data = await resp.json();
+                    if (data.success) {
+                        window.location.href = "/";
+                    } else {
+                        alert("Error: " + (data.error || "Unknown"));
+                    }
+                } catch (err) {
+                    alert("Error: " + err.message);
+                }
+            }
+        </script>
+    </body>
+</html>

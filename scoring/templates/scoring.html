@@ -1,0 +1,3718 @@
+<!doctype html>
+<html>
+    <head>
+        <title>{{ info.task_name }}{% if info.task_variant %} / {{ info.task_variant }}{% endif %} / {{ uuid }}</title>
+        <style>
+            * {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+            }
+            @keyframes info-refresh-spin {
+                to { transform: rotate(360deg); }
+            }
+            :root {
+                /* Width of the prior-scores side panel. Updated live by the
+                   resize-drag handler; default chosen to fit one full row
+                   without wrapping. */
+                --side-panel-width: 260px;
+                /* When collapsed, only a 36px tab remains visible — the body
+                   reads this var (via .side-panel-collapsed on <html>) to
+                   keep enough right-padding that the tab doesn't overlap
+                   page content. */
+                --side-panel-collapsed-width: 36px;
+                --side-panel-active-width: var(--side-panel-width);
+            }
+            html.side-panel-collapsed {
+                --side-panel-active-width: var(--side-panel-collapsed-width);
+            }
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                padding: 20px;
+                padding-right: calc(8px + var(--side-panel-active-width));
+                background: #f8f9fa;
+                color: #333;
+            }
+            h1 {
+                font-size: 1.4em;
+                margin-bottom: 16px;
+            }
+            h1 a {
+                color: #2563eb;
+                text-decoration: none;
+            }
+            h1 a:hover {
+                text-decoration: underline;
+            }
+            /* Title, sample overview (queue progress) and the layout/unblind
+               toggles ride along at the top of the viewport while scrolling.
+               z-index stays below the prior-scores side panel (900) and native
+               <dialog> top-layer, so neither is covered. */
+            .page-header {
+                position: sticky;
+                top: 0;
+                z-index: 100;
+                background: #f8f9fa;
+                padding-top: 10px;
+                padding-bottom: 12px;
+                margin-bottom: 16px;
+                box-shadow: 0 6px 12px -8px rgba(15, 23, 42, 0.3);
+            }
+            .page-header > :last-child {
+                margin-bottom: 0;
+            }
+            .section {
+                background: white;
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                padding: 20px;
+                margin-bottom: 16px;
+            }
+            .section h2 {
+                font-size: 1.1em;
+                margin-bottom: 12px;
+                color: #444;
+            }
+
+            .run-info {
+                padding: 14px 20px;
+                font-size: 0.8em;
+                color: #666;
+                line-height: 1.8;
+            }
+            .run-info span {
+                margin-right: 16px;
+                white-space: nowrap;
+            }
+            .run-info strong {
+                color: #444;
+            }
+
+            .incognito-icon {
+                font-size: 1.1em;
+                line-height: 1;
+            }
+            body.blinded .blind-hidden {
+                display: none !important;
+            }
+            {% include "_dialog_styles.css" %}
+
+            details {
+                background: white;
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                margin-bottom: 16px;
+            }
+            details summary {
+                padding: 14px 20px;
+                cursor: pointer;
+                font-weight: 600;
+                font-size: 1.05em;
+                color: #444;
+                user-select: none;
+            }
+            details summary:hover {
+                background: #f8f9fa;
+            }
+            details[open] summary {
+                border-bottom: 1px solid #eee;
+            }
+            details .content {
+                padding: 20px;
+                font-size: 0.9em;
+                line-height: 1.6;
+                max-height: var(--content-h, 500px);
+                overflow-y: auto;
+            }
+            /* Scratch pad: a layout panel like the instructions. The content
+               is height-driven by the shared --content-h (not max-height) so
+               the textarea fills it. */
+            #scratchpad-section > .content {
+                position: relative;
+                display: flex;
+                flex-direction: column;
+                height: var(--content-h, 240px);
+                /* Matches the score panel's floor so the two stay equal height
+                   in two-col when dragged to the minimum. */
+                min-height: 240px;
+                max-height: none;
+                overflow: visible;
+                padding: 12px 20px 16px;
+            }
+            body.two-col #scratchpad-section[open] > .content {
+                height: var(--content-h, 500px);
+            }
+            #scratchpad-textarea {
+                flex: 1 1 auto;
+                min-height: 0;
+                width: 100%;
+                box-sizing: border-box;
+                resize: none;
+                border: 1px solid #ccc;
+                border-radius: 6px;
+                padding: 8px;
+                font-family: inherit;
+                font-size: inherit;
+            }
+            /* Transient save status overlaid in the corner so it never steals a
+               line from the textarea (which must fill the box to match the
+               paired score panel exactly). */
+            #scratchpad-status {
+                position: absolute;
+                right: 28px;
+                bottom: 22px;
+                margin: 0;
+                font-size: 0.8em;
+                color: #666;
+                pointer-events: none;
+                padding: 1px 5px;
+                border-radius: 4px;
+                background: rgba(255, 255, 255, 0.85);
+            }
+            #scratchpad-status:empty {
+                display: none;
+            }
+            .scratchpad-actions {
+                float: right;
+                display: inline-flex;
+                gap: 6px;
+            }
+            .scratchpad-scope-btn {
+                padding: 3px 10px;
+                font-size: 0.78em;
+            }
+            /* Submit Score panel mirrors the scratch pad so the two sit at the
+               same height side by side: a bare card (padding moved into the
+               header + .content) whose header bar matches the scratch pad
+               <summary>, and whose .content is a height-driven flex column the
+               explanation textarea fills. Both panels share --content-h, and
+               with identical chrome the section heights come out equal. */
+            .section[data-panel="score"] {
+                padding: 0;
+                overflow: hidden;
+            }
+            .score-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 12px;
+                padding: 14px 20px;
+                border-bottom: 1px solid #eee;
+            }
+            .section .score-header h2 {
+                margin: 0;
+                font-size: 1.05em;
+                font-weight: 600;
+                color: #444;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .score-header-actions {
+                display: flex;
+                gap: 8px;
+                flex-shrink: 0;
+            }
+            /* Sized to match the scratch pad summary's scope buttons so the
+               header bar is the same height as the scratch pad summary. */
+            .score-header-actions button {
+                font-size: 0.78em;
+                padding: 3px 10px;
+            }
+            [data-panel="score"] > .content {
+                display: flex;
+                flex-direction: column;
+                height: var(--content-h, 320px);
+                /* Floor so the fixed inputs + buttons never overlap or eat the
+                   explanation box when the panel is dragged small. */
+                min-height: 240px;
+                max-height: none;
+                overflow: hidden;
+                padding: 12px 20px 16px;
+            }
+            body.two-col [data-panel="score"] > .content {
+                height: var(--content-h, 500px);
+            }
+            #score-form {
+                display: flex;
+                flex-direction: column;
+                flex: 1 1 auto;
+                min-height: 0;
+            }
+            body.two-col .panel-cell > .section[data-panel] {
+                margin-bottom: 0;
+            }
+            .instructions-loading {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                color: #6b7280;
+                font-style: italic;
+                padding: 4px 0;
+            }
+            .instructions-spinner {
+                display: inline-block;
+                width: 14px;
+                height: 14px;
+                border: 2px solid #cbd5e1;
+                border-top-color: #1e40af;
+                border-radius: 50%;
+                animation: info-refresh-spin 0.8s linear infinite;
+                flex-shrink: 0;
+            }
+            details .content > :first-child {
+                margin-top: 0;
+            }
+            details .content > :last-child {
+                margin-bottom: 0;
+            }
+            details .content pre {
+                background: #f6f8fa;
+                border: 1px solid #e1e4e8;
+                border-radius: 4px;
+                padding: 12px;
+                overflow-x: auto;
+                font-size: 0.9em;
+                line-height: 1.45;
+            }
+            details .content code {
+                font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+                font-size: 0.9em;
+            }
+            details .content :not(pre) > code {
+                background: #f6f8fa;
+                padding: 0.1em 0.3em;
+                border-radius: 3px;
+            }
+            details .content pre code {
+                background: transparent;
+                padding: 0;
+                white-space: pre;
+            }
+            details .content blockquote {
+                border-left: 3px solid #d0d7de;
+                color: #57606a;
+                margin: 0 0 12px;
+                padding: 0 12px;
+            }
+            details .content table {
+                border-collapse: collapse;
+                margin-bottom: 12px;
+            }
+            details .content th,
+            details .content td {
+                border: 1px solid #d0d7de;
+                padding: 4px 8px;
+            }
+            details .content p {
+                margin: 0.9em 0;
+            }
+            details .content ul,
+            details .content ol {
+                padding-left: 0;
+                margin: 0.9em 0;
+                list-style-position: inside;
+            }
+            details .content li {
+                margin-bottom: 0.2em;
+            }
+            /* Loose-list items wrap content in <p>; render the first one
+               inline so the bullet sits next to the text instead of on a
+               line above it. */
+            details .content li > p:first-child {
+                display: inline;
+                margin: 0;
+            }
+
+            .prior-scores-panel {
+                position: fixed;
+                top: 0;
+                right: 0;
+                height: 100vh;
+                width: var(--side-panel-width);
+                background: #f3f6fb;
+                border-left: 1px solid #c2d3e6;
+                color: #1c3d5a;
+                display: flex;
+                flex-direction: column;
+                box-shadow: -2px 0 6px rgba(0, 0, 0, 0.04);
+                z-index: 900;
+                transition: transform 200ms ease;
+            }
+            html.side-panel-collapsed .prior-scores-panel {
+                /* Slide the panel fully off-screen; the toggle button sits
+                   outside the panel's left edge (translateX(-100%)) so it
+                   stays visible at the right edge of the viewport. */
+                transform: translateX(100%);
+            }
+            .prior-scores-resize-handle {
+                position: absolute;
+                left: -3px;
+                top: 0;
+                width: 6px;
+                height: 100%;
+                cursor: col-resize;
+                background: transparent;
+                z-index: 2;
+            }
+            .prior-scores-resize-handle:hover,
+            .prior-scores-resize-handle.dragging {
+                background: rgba(37, 99, 235, 0.25);
+            }
+            html.side-panel-collapsed .prior-scores-resize-handle {
+                /* Hide the resize bar when the panel is collapsed — it'd
+                   otherwise sit over the toggle's edge and confuse clicks. */
+                display: none;
+            }
+            .prior-scores-toggle {
+                position: absolute;
+                left: 0;
+                top: 12px;
+                width: var(--side-panel-collapsed-width);
+                padding: 8px 0;
+                background: #f3f6fb;
+                border: 1px solid #c2d3e6;
+                border-right: none;
+                border-radius: 6px 0 0 6px;
+                cursor: pointer;
+                font-family: inherit;
+                color: #1c3d5a;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                gap: 4px;
+                transform: translateX(-100%);
+            }
+            .prior-scores-toggle:hover {
+                background: #e6eef9;
+            }
+            .prior-scores-toggle-icon {
+                font-size: 1.1em;
+                transition: transform 200ms ease;
+            }
+            html.side-panel-collapsed .prior-scores-toggle-icon {
+                transform: rotate(180deg);
+            }
+            .prior-scores-toggle-label {
+                writing-mode: vertical-rl;
+                transform: rotate(180deg);
+                font-size: 0.75em;
+                letter-spacing: 0.04em;
+                text-transform: uppercase;
+            }
+            .prior-scores-body {
+                padding: 16px;
+                overflow-y: auto;
+                flex: 1;
+                /* When collapsed the body slides off-screen; hide its
+                   contents from focus/screen-readers too. */
+                transition: opacity 150ms ease;
+            }
+            html.side-panel-collapsed .prior-scores-body {
+                opacity: 0;
+                pointer-events: none;
+            }
+            .rubric-warning {
+                margin-left: 8px;
+                color: #b45309;
+                font-weight: 600;
+                font-size: 0.9em;
+            }
+            .prior-scores-title {
+                margin: 0 0 4px 0;
+                font-size: 1em;
+            }
+            .prior-scores-hint {
+                margin: 0 0 8px 0;
+                color: #4a5e75;
+                font-size: 0.85em;
+            }
+            .prior-scores-empty {
+                margin: 8px 0 0 0;
+                color: #6b7280;
+                font-size: 0.85em;
+                font-style: italic;
+            }
+            .prior-scores-list {
+                list-style: none;
+                margin: 0;
+                padding: 0;
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+            }
+            .prior-scores-list li {
+                background: #fff;
+                border: 1px solid #d8e3ef;
+                border-radius: 4px;
+                padding: 6px 10px;
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+                font-family: monospace;
+            }
+            .prior-scores-list .ps-header {
+                display: flex;
+                align-items: baseline;
+                gap: 6px;
+                white-space: nowrap;
+            }
+            .prior-scores-list .badge {
+                font-size: 0.75em;
+                padding: 1px 6px;
+                border-radius: 10px;
+                font-family: inherit;
+            }
+            .prior-scores-list .badge-hawk {
+                background: #d1fae5;
+                color: #065f46;
+                border: 1px solid #6ee7b7;
+            }
+            .prior-scores-list .badge-local {
+                background: #fef3c7;
+                color: #92400e;
+                border: 1px solid #fcd34d;
+            }
+            .prior-scores-list .badge-draft {
+                background: #e0e7ff;
+                color: #3730a3;
+                border: 1px solid #a5b4fc;
+            }
+            .prior-scores-list li.ps-draft {
+                background: #f5f3ff;
+                border-color: #c7d2fe;
+                border-left: 3px solid #6366f1;
+            }
+            .prior-scores-list .ps-explanation {
+                color: #374151;
+                font-family: inherit;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .prior-scores-list .ps-explanation.clickable {
+                cursor: pointer;
+            }
+            .prior-scores-list .ps-explanation.expanded {
+                white-space: pre-wrap;
+                overflow: visible;
+            }
+            .prior-scores-list .ps-when {
+                color: #6b7280;
+                font-size: 0.85em;
+                margin-left: auto;
+            }
+            .toast {
+                position: fixed;
+                right: 24px;
+                bottom: 24px;
+                min-width: 240px;
+                max-width: 420px;
+                padding: 12px 16px;
+                border-radius: 6px;
+                color: #fff;
+                font-size: 0.9em;
+                box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+                opacity: 0;
+                transform: translateY(8px);
+                transition: opacity 200ms ease, transform 200ms ease;
+                pointer-events: none;
+                z-index: 1000;
+            }
+            .toast.toast-visible {
+                opacity: 1;
+                transform: translateY(0);
+                pointer-events: auto;
+            }
+            .toast-success {
+                background: #065f46;
+            }
+            .toast-error {
+                background: #991b1b;
+            }
+            .toast-close {
+                margin-left: 12px;
+                color: inherit;
+                background: transparent;
+                border: 1px solid currentColor;
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-size: 0.8em;
+                cursor: pointer;
+                font-family: inherit;
+            }
+            .local-history-info {
+                background: #e7f3ff;
+                border: 1px solid #91c8ff;
+                border-radius: 6px;
+                padding: 12px 16px;
+                margin-bottom: 16px;
+                color: #1c3d5a;
+                font-size: 0.9em;
+            }
+            .stash-info {
+                background: #e7f3ff;
+                border: 1px solid #91c8ff;
+                border-radius: 6px;
+                padding: 12px 16px;
+                margin-bottom: 16px;
+                color: #1c3d5a;
+                font-size: 0.9em;
+                display: flex;
+                align-items: center;
+                gap: 12px;
+            }
+            .stash-info .stash-text {
+                flex: 1;
+            }
+            .stash-info button {
+                background: transparent;
+                color: #1c3d5a;
+                border: 1px solid #91c8ff;
+                padding: 4px 12px;
+                border-radius: 4px;
+                font-size: 0.85em;
+                cursor: pointer;
+                font-family: inherit;
+                white-space: nowrap;
+            }
+            /* Transparent button: hover-by-filter is invisible, so fill the
+               background instead and suppress the universal filter. */
+            .stash-info button:not(:disabled):hover {
+                background: #d0e6ff;
+                filter: none;
+            }
+            .btn-close {
+                background: transparent;
+                color: inherit;
+                border: none;
+                padding: 2px 8px;
+                font-size: 1.2em;
+                line-height: 1;
+                cursor: pointer;
+                font-family: inherit;
+                border-radius: 4px;
+            }
+            .btn-close:not(:disabled):hover {
+                background: rgba(0, 0, 0, 0.08);
+                filter: none;
+            }
+            .local-pending-warning {
+                background: #fff3cd;
+                border: 1px solid #ffc107;
+                border-radius: 6px;
+                padding: 12px 16px;
+                margin-bottom: 16px;
+                color: #856404;
+                font-size: 0.9em;
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                flex-wrap: wrap;
+            }
+            /* Size override for the inline button inside the warning banner;
+               color comes from the .btn-warning class on the element itself. */
+            .local-pending-warning button {
+                padding: 6px 14px;
+                border-radius: 4px;
+            }
+            .local-pending-warning .push-msg {
+                flex-basis: 100%;
+                font-size: 0.85em;
+                color: #856404;
+                margin-top: 4px;
+            }
+
+            label {
+                display: block;
+                font-weight: 600;
+                margin-bottom: 4px;
+                font-size: 0.9em;
+            }
+            input[type="number"] {
+                width: 120px;
+                padding: 8px;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                font-size: 1em;
+            }
+            textarea {
+                width: 100%;
+                min-height: 150px;
+                padding: 12px;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                font-size: 0.95em;
+                font-family: inherit;
+                resize: vertical;
+                line-height: 1.5;
+            }
+            /* Button color palette. Each role uses one canonical color so a
+               "red" button always means the same thing visually, and disabled
+               / hover behavior is shared across every button. */
+            button {
+                background: var(--btn-primary);
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 6px;
+                font-size: 0.9em;
+                cursor: pointer;
+                font-family: inherit;
+                transition:
+                    filter 0.12s,
+                    opacity 0.12s;
+            }
+            :root {
+                --btn-primary: #2563eb; /* blue: main positive action (Submit Score, Open in VS Code) */
+                --btn-success: #059669; /* green: proceed / start (Next, Start Container, Resume Timer) */
+                --btn-warning: #d97706; /* amber: caution / save-not-submit / retry (Stash, Pause, Push, Retry) */
+                --btn-danger: #dc2626; /* red: destructive (Exit, Reset Timer, Stop Container) */
+                --btn-neutral: #6b7280; /* gray: secondary (Skip, Open Artifacts, Tasks, Install noVNC) */
+            }
+            button:not(:disabled):hover {
+                filter: brightness(0.92);
+            }
+            button:disabled {
+                opacity: 0.55;
+                cursor: not-allowed;
+            }
+            .btn-primary {
+                background: var(--btn-primary);
+            }
+            .btn-success {
+                background: var(--btn-success);
+            }
+            .btn-warning {
+                background: var(--btn-warning);
+            }
+            .btn-danger {
+                background: var(--btn-danger);
+            }
+            .btn-neutral {
+                background: var(--btn-neutral);
+            }
+            /* Layout-only helpers used in the form footer. */
+            .btn-row-gap {
+                margin-left: 8px;
+            }
+            #result {
+                margin-top: 12px;
+                padding: 12px;
+                border-radius: 4px;
+                display: none;
+                align-items: flex-start;
+                gap: 12px;
+            }
+            #result .result-text {
+                flex: 1;
+            }
+            .success {
+                background: #d1fae5;
+                border: 1px solid #10b981;
+                color: #065f46;
+            }
+            .error {
+                background: #fee2e2;
+                border: 1px solid #ef4444;
+                color: #991b1b;
+            }
+
+            .connection {
+                background: #f0f4f8;
+                font-family: monospace;
+                font-size: 0.85em;
+                padding: 12px;
+                border-radius: 4px;
+                margin: 8px 0;
+                cursor: pointer;
+            }
+            .connection:hover {
+                background: #e2e8f0;
+            }
+            /* Clickable file paths shown in status messages. The click hits
+               /api/open-path which launches the OS default app — file://
+               links from http:// pages are blocked by browsers, so we
+               route through the server. */
+            .path-link {
+                font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+                color: inherit;
+                text-decoration: underline dotted;
+                text-underline-offset: 2px;
+                cursor: pointer;
+            }
+            .path-link:hover {
+                text-decoration: underline;
+            }
+            .bottom-section {
+                font-size: 0.9em;
+                color: #666;
+            }
+            .bottom-section h2 {
+                font-size: 1em;
+            }
+
+            .queue-progress {
+                background: #e0f2fe;
+                border: 1px solid #93c5fd;
+                border-radius: 8px;
+                padding: 12px 20px;
+                margin-bottom: 16px;
+            }
+            .queue-bar {
+                background: #bfdbfe;
+                border-radius: 4px;
+                height: 6px;
+                overflow: hidden;
+                margin-top: 8px;
+            }
+            .queue-bar-fill {
+                background: #2563eb;
+                height: 100%;
+                transition: width 0.3s;
+            }
+
+            .panel-pair {
+                display: block;
+            }
+            body.two-col .panel-pair {
+                display: flex;
+                margin-bottom: 0;
+            }
+            body.two-col .panel-cell {
+                flex: 1 1 0;
+                min-width: 100px;
+                display: flex;
+                flex-direction: column;
+            }
+            body.two-col .panel-cell details {
+                margin-bottom: 0;
+            }
+            /* The pair's two cells already stretch to equal height (flex row).
+               Make the Submit Score / scratch pad panels fill their cell so
+               their card bottoms line up exactly, absorbing any sub-pixel
+               difference between the header bar and the scratch pad summary.
+               Only the open scratch pad fills — collapsed it stays compact. */
+            body.two-col .panel-cell > .section[data-panel="score"],
+            body.two-col .panel-cell > #scratchpad-section[open] {
+                flex: 1 1 auto;
+                min-height: 0;
+            }
+            /* In two-col the pair owns one height; both panels' .content
+               share it via the --content-h variable. (Chrome's <details>
+               shadow DOM ignores display: flex on its host, so a flex
+               chain through details doesn't constrain .content; an
+               explicit height does.) */
+            body.two-col .panel-cell details[open] > .content {
+                height: var(--content-h, 500px);
+                max-height: none;
+            }
+            /* Height resizers sit in the gap *between* boxes, mirroring the
+               col-resizer between side-by-side panels. Two flavors, each shown
+               only in its layout:
+               - per-panel (has data-panel): one below each box in one-col, so
+                 every box resizes independently;
+               - per-pair (no data-panel): one full-width bar below the pair in
+                 two-col, where the side-by-side boxes share one height. */
+            .row-resizer {
+                height: 6px;
+                cursor: ns-resize;
+                margin: 5px 0;
+                background: transparent;
+                transition: background 0.15s;
+                border-radius: 3px;
+            }
+            .row-resizer:hover,
+            .row-resizer.dragging {
+                background: rgba(37, 99, 235, 0.25);
+            }
+            /* One-col bars sit after a box that still carries its 16px bottom
+               margin; pull the bar up into that margin so it's centered in the
+               gap (5px each side) instead of leaving a big gap above it. */
+            .row-resizer[data-panel] {
+                margin: -11px 0 5px 0;
+            }
+            .row-resizer:not([data-panel]) {
+                display: none;
+            }
+            body.two-col .row-resizer[data-panel] {
+                display: none;
+            }
+            body.two-col .row-resizer:not([data-panel]) {
+                display: block;
+            }
+            /* No grip for a collapsed panel — nothing to resize. */
+            .panel-cell:has(details:not([open])) .row-resizer[data-panel] {
+                display: none;
+            }
+            .col-resizer {
+                display: none;
+                width: 6px;
+                cursor: ew-resize;
+                flex-shrink: 0;
+                background: transparent;
+                transition: background 0.15s;
+                border-radius: 3px;
+                align-self: stretch;
+            }
+            body.two-col .col-resizer {
+                display: block;
+            }
+            .col-resizer:hover,
+            .col-resizer.dragging {
+                background: rgba(37, 99, 235, 0.25);
+            }
+
+            /* Single score group fills the panel: the inputs row sits on top
+               and the explanation textarea flexes to fill the rest, handled
+               like the scratch pad textarea. No card chrome — the panel is the
+               card. */
+            .score-group {
+                flex: 1 1 auto;
+                display: flex;
+                flex-direction: column;
+                min-height: 0;
+            }
+            .score-group-row {
+                display: flex;
+                gap: 24px;
+                flex-wrap: wrap;
+                flex: 0 0 auto;
+                margin-bottom: 8px;
+            }
+            .score-group .field {
+                margin-bottom: 4px;
+            }
+            .score-group .explanation-field {
+                flex: 1 1 auto;
+                display: flex;
+                flex-direction: column;
+                min-height: 0;
+                margin-top: 8px;
+                margin-bottom: 0;
+            }
+            .score-group .explanation-field label {
+                flex: 0 0 auto;
+            }
+            .score-group .explanation-field textarea {
+                flex: 1 1 auto;
+                min-height: 0;
+                resize: none;
+            }
+            .field-timer .timer-value {
+                display: inline-block;
+                padding: 8px 0;
+                font-size: 1em;
+                font-variant-numeric: tabular-nums;
+                color: #555;
+                min-width: 56px;
+            }
+            .score-actions {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                flex: 0 0 auto;
+                margin-top: 12px;
+            }
+            body.two-col .bottom-row {
+                display: flex;
+                gap: 16px;
+                align-items: stretch;
+            }
+            body.two-col .bottom-row > .section {
+                flex: 1 1 0;
+                min-width: 0;
+            }
+        </style>
+    </head>
+    <body class="blinded">
+        {% include "_config_changes.html" %}
+        <div
+            id="other-container-banner"
+            style="
+                display: none;
+                background: #dbeafe;
+                border: 1px solid #3b82f6;
+                color: #1e3a8a;
+                border-radius: 8px;
+                padding: 10px 16px;
+                margin-bottom: 16px;
+                font-size: 0.9em;
+            "
+        ></div>
+
+        <header class="page-header">
+        {% if show_queue_progress %}
+        <div class="queue-progress">
+            <div
+                style="
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    font-size: 0.9em;
+                    color: #1e40af;
+                "
+            >
+                <strong
+                    >Sample
+                    <input
+                        type="number"
+                        id="nav-index"
+                        value="{{ current_idx + 1 }}"
+                        min="1"
+                        max="{{ queue_total }}"
+                        style="
+                            width: 3.5em;
+                            text-align: center;
+                            font-weight: 600;
+                            font-size: inherit;
+                            border: 1px solid #93c5fd;
+                            border-radius: 4px;
+                            padding: 1px 4px;
+                            color: inherit;
+                            background: transparent;
+                        "
+                    />
+                    of {{ queue_total }}</strong
+                >
+                <span style="display: inline-flex; align-items: center; gap: 12px">
+                    <span>
+                        <span id="queue-done-count">{{ queue_done }}</span> done<span
+                            id="queue-skipped-wrap"
+                            style="display: {% if queue_skipped %}inline{% else %}none{% endif %}"
+                            >, <span id="queue-skipped-count">{{ queue_skipped }}</span> skipped</span
+                        >
+                    </span>
+                    <button class="btn-primary" onclick="goToSummary()" id="summary-btn">Summary</button>
+                    <button class="btn-danger" onclick="exitTool()" id="exit-btn">Exit</button>
+                </span>
+            </div>
+            <div class="queue-bar">
+                <div
+                    id="queue-bar-fill"
+                    class="queue-bar-fill"
+                    style="width: {{ ((queue_done + queue_skipped) / queue_total * 100)|round(1) }}%;"
+                ></div>
+            </div>
+        </div>
+        {% endif %}
+
+        <div
+            style="
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 16px;
+                flex-wrap: wrap;
+            "
+        >
+            <h1 style="margin-bottom: 0">
+                <span data-info-field="title-task">{{ info.task_name }}{% if info.task_variant %} / {{ info.task_variant }}{% endif %}</span> / {{ uuid }}
+                <a
+                    id="viewer-url-link"
+                    href="{{ info.viewer_url or '#' }}"
+                    target="_blank"
+                    class="blind-hidden"
+                    title="Open in viewer"
+                    style="font-size: 0.65em; text-decoration: none; margin-left: 6px; vertical-align: middle; {% if not info.viewer_url %}display: none;{% endif %}"
+                    >&#x2197;</a
+                >
+                <span
+                    id="info-refresh-spinner"
+                    title="Checking Hawk for updates..."
+                    style="
+                        display: {% if info_needs_refresh %}inline-block{% else %}none{% endif %};
+                        margin-left: 10px;
+                        width: 12px;
+                        height: 12px;
+                        border: 2px solid #cbd5e1;
+                        border-top-color: #1e40af;
+                        border-radius: 50%;
+                        animation: info-refresh-spin 0.8s linear infinite;
+                        vertical-align: middle;
+                    "
+                ></span>
+                <span
+                    id="info-refresh-pill"
+                    style="
+                        display: none;
+                        margin-left: 10px;
+                        padding: 2px 10px;
+                        font-size: 0.55em;
+                        font-weight: 600;
+                        background: #dbeafe;
+                        color: #1e3a8a;
+                        border-radius: 999px;
+                        vertical-align: middle;
+                        cursor: default;
+                    "
+                    title="Local metadata cache was outdated; the page now shows fresh data from Hawk."
+                >Data updated from Hawk</span>
+            </h1>
+            <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap">
+                <label
+                    style="
+                        display: inline-flex;
+                        align-items: center;
+                        gap: 6px;
+                        font-size: 0.85em;
+                        font-weight: normal;
+                        cursor: pointer;
+                        color: #444;
+                        white-space: nowrap;
+                    "
+                >
+                    <input type="checkbox" id="two-col-toggle" />
+                    2-column layout
+                </label>
+            </div>
+        </div>
+        </header>
+
+        {% if not info.no_metadata %}
+        <details class="blind-hidden">
+            <summary style="cursor: pointer; font-weight: bold; margin-bottom: 8px">Run Info</summary>
+            <div class="run-info">
+                <span><strong>Model:</strong> <span data-info-field="model">{{ info.model or '?' }}</span></span>
+                <span><strong>Variant:</strong> <span data-info-field="task_variant">{{ info.task_variant or '?' }}</span></span>
+                <span><strong>Version:</strong> <span data-info-field="task_version">{{ info.task_version or '?' }}</span></span>
+                <span><strong>Eval Set:</strong> <span data-info-field="eval_set_id">{{ info.eval_set_id or '?' }}</span></span>
+                <span><strong>By:</strong> <span data-info-field="created_by">{{ info.created_by or '?' }}</span></span>
+                <span
+                    ><strong>Duration:</strong> <span data-info-field="duration">{{ fmt_duration(info.working_time_seconds) }} working / {{
+                    fmt_duration(info.total_time_seconds) }} total</span></span
+                >
+                <span
+                    data-info-field="tokens-tooltip"
+                    title="Input: {{ '{:,}'.format(info.input_tokens) if info.input_tokens is not none else '?' }}
+Cache read: {{ '{:,}'.format(info.cache_read_tokens) if info.cache_read_tokens is not none else '?' }}
+Cache write: {{ '{:,}'.format(info.cache_write_tokens) if info.cache_write_tokens is not none else '?' }}
+Output: {{ '{:,}'.format(info.output_tokens) if info.output_tokens is not none else '?' }}
+Reasoning: {{ '{:,}'.format(info.reasoning_tokens) if info.reasoning_tokens is not none else '?' }}
+Total: {{ '{:,}'.format(info.total_tokens) if info.total_tokens is not none else '?' }}"
+                    style="text-decoration: underline dotted; text-underline-offset: 3px; cursor: help"
+                    ><strong>Tokens:</strong> <span data-info-field="total_tokens_short">{{ fmt_tokens(info.total_tokens) }}</span></span
+                >
+                <span><strong>Messages:</strong> <span data-info-field="message_count">{{ info.message_count or '?' }}</span></span>
+                <span><strong>Actions:</strong> <span data-info-field="action_count">{{ info.action_count or '?' }}</span></span>
+                <span><strong>Status:</strong> <span data-info-field="status">{{ info.status or '?' }}</span></span>
+            </div>
+        </details>
+        {% endif %}
+
+        {% if hawk and has_local_pending %}
+        <div class="local-pending-warning">
+            <strong>This sample has local score(s) that have not been pushed to Hawk.</strong>
+            <button type="button" class="btn-warning" id="push-sample-btn" onclick="pushSampleToHawk()">
+                Push this sample to Hawk
+            </button>
+            <p id="push-sample-msg" class="push-msg" style="display: none"></p>
+        </div>
+        {% endif %}
+
+        {% if info.no_metadata %}
+        <div
+            class="local-pending-warning"
+            data-dismissible-banner
+            data-storage-key="no-metadata-banner-dismissed"
+            style="display: none"
+        >
+            <strong>No sample.json for this sample.</strong>
+            <span style="flex: 1">
+                Task name and image are unknown. Add a <code>sample.json</code>
+                (<code>{"task": "...", "image": "&lt;tarball&gt;.tar"}</code>) to this sample
+                directory, or pass <code>--image &lt;local-docker-tag&gt;</code>.
+            </span>
+            <button
+                type="button"
+                class="btn-close"
+                title="Dismiss for this session"
+                aria-label="Dismiss for this session"
+            >&times;</button>
+        </div>
+        {% endif %}
+
+        {# Scoring guidance: links to the external guidance docs, configured via
+           general_guidance_url and task_specific_guidance_url.<task>. #}
+        <div class="section">
+            <strong>Scoring guidance</strong>
+            {% if general_guidance_url or task_guidance_url %}
+            <ul style="margin: 6px 0 0 0; padding-left: 18px;">
+                {% if general_guidance_url %}
+                <li>
+                    <a href="{{ general_guidance_url }}" target="_blank" rel="noopener noreferrer">
+                        General scoring guidance
+                    </a>
+                </li>
+                {% endif %}
+                {% if task_guidance_url %}
+                <li>
+                    <a href="{{ task_guidance_url }}" target="_blank" rel="noopener noreferrer">
+                        {{ task_guidance_label }}
+                    </a>
+                </li>
+                {% endif %}
+            </ul>
+            {% else %}
+            <p style="margin: 6px 0 0 0; color: #6b7280;">
+                No guidance links configured. Set them with
+                <code>local-manual-score config set general_guidance_url &lt;url&gt;</code>
+                and
+                <code>local-manual-score config set task_specific_guidance_url.{{ info.task_name or "&lt;task&gt;" }} &lt;url&gt;</code>.
+            </p>
+            {% endif %}
+        </div>
+
+        <div class="section">
+            <p>
+                <a
+                    href="https://docs.google.com/document/d/1SCo_tIbPRDsP6B4J1C08o5CTGUSTzDDcsspgvRS_vTY/edit?pli=1&tab=t.4j0zehp6kof"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    >Scoring Philosophy</a
+                >
+            </p>
+        </div>
+
+        {% if not finish_recorded %}
+        <div class="stash-info" id="stash-info-banner" {% if not has_stash %}style="display: none" {% endif %}>
+            <span class="stash-text">
+                <strong>Saved draft for this sample.</strong> Auto-loaded when you open this sample; takes precedence
+                over any previously submitted score.
+            </span>
+            <button type="button" id="restore-stash-btn" onclick="restoreStash()">Restore</button>
+            <button type="button" id="drop-stash-btn" onclick="dropStash()">Drop</button>
+        </div>
+        <div
+            class="stash-info local-history-info"
+            id="local-history-info"
+            {% if not has_local_history %}style="display: none"{% endif %}
+        >
+            <span class="stash-text">
+                <strong>You already scored this sample.</strong> Submitting appends a new ScoreEvent
+                &mdash; see <em>Your scores for this sample</em> above.
+            </span>
+            <button type="button" id="reload-history-btn" onclick="reloadHistory()">Load most-invested into form</button>
+        </div>
+        {% endif %}
+
+        {# Submit Score box paired with the scratch pad: side by side in
+           two-col (col-resizer between them), stacked in one-col. #}
+        <div class="panel-pair" data-pair="1">
+        <div class="panel-cell">
+        <div class="section"{% if not finish_recorded %} data-panel="score" data-fill{% endif %}>
+            {% if finish_recorded %}
+            <div style="display: flex; align-items: center; gap: 12px; margin: 0">
+                <p style="margin: 0">You finished scoring on this sample.</p>
+                <button type="button" class="btn-warning" onclick="reopenSample()" id="reopen-btn"
+                    style="font-size: 0.85em; padding: 6px 12px">Reopen</button>
+            </div>
+            {% else %}
+            <div class="score-header">
+                <h2 class="score-header-title">Submit Score{% if scorer_email %} ({{ scorer_email }}){% endif %}</h2>
+                <div class="score-header-actions">
+                    <button
+                        type="button"
+                        class="btn-warning"
+                        id="pause-timers-btn"
+                        onclick="togglePauseTimers()"
+                        {% if pause_timer_hotkey %}title="Hotkey: {{ pause_timer_hotkey }}"{% endif %}
+                    >
+                        <span id="pause-timers-icon" aria-hidden="true">&#9208;</span>
+                        <span id="pause-timers-label">Pause Timer</span>
+                    </button>
+                    <button
+                        type="button"
+                        class="btn-danger"
+                        id="reset-timers-btn"
+                        onclick="resetTimers()"
+                    >
+                        <span aria-hidden="true">&#8634;</span>
+                        Reset Timer
+                    </button>
+                </div>
+            </div>
+            <div class="content">
+            <form id="score-form" onsubmit="submitScore(event)" autocomplete="off">
+                <div class="score-group">
+                    <div class="score-group-row">
+                        <div class="field">
+                            <label>Score (0.0 - 1.0)</label>
+                            <input
+                                type="number"
+                                data-field="value"
+                                min="0"
+                                max="1"
+                                step="0.01"
+                                placeholder="0.0"
+                                required
+                            />
+                        </div>
+                        <div class="field">
+                            <label>Minutes to score</label>
+                            <input
+                                type="number"
+                                data-field="minutes_to_score"
+                                min="0"
+                                step="1"
+                                placeholder="e.g. 14"
+                                required
+                            />
+                        </div>
+                        <div class="field field-timer">
+                            <label>Timer</label>
+                            <span class="timer-value" id="normal-timer">0:00</span>
+                        </div>
+                    </div>
+                    <div class="field explanation-field">
+                        <label>Explanation</label>
+                        <textarea
+                            data-field="explanation"
+                            required
+                            placeholder="Explain why you gave this score..."
+                        ></textarea>
+                    </div>
+                </div>
+                <div class="score-actions">
+                    <button type="submit" class="btn-primary" id="submit-btn" disabled>
+                        Submit Score
+                    </button>
+                    <button type="button" class="btn-warning" id="stash-btn" onclick="stashScore()" disabled>
+                        Stash
+                    </button>
+                    <button
+                        type="button"
+                        class="btn-success"
+                        id="finish-btn"
+                        onclick="finishSample()"
+                        style="margin-left: auto;{% if not has_local_history %} display: none{% endif %}"
+                        {% if finish_recorded %}disabled title="Already sent for this sample"{% endif %}
+                    >
+                        Done Scoring Sample
+                    </button>
+                    {% if mode != "single" %}
+                    <button
+                        type="button"
+                        class="btn-neutral"
+                        id="skip-btn"
+                        onclick="skipSample()"
+                        style="{% if has_local_history %}display: none{% else %}margin-left: auto{% endif %}"
+                    >
+                        Skip
+                    </button>
+                    {% endif %}
+                </div>
+            </form>
+            </div>{# .content (score form) #}
+            {% endif %}
+            {# Next / View Summary navigation only makes sense across a queue of
+               more than one sample. A single-sample set has nowhere to go and
+               no overview worth showing; the user signals completion with the
+               explicit "Done Scoring This Sample" button instead. #}
+            {% if show_queue_progress %}
+            <div
+                id="queue-nav"
+                style="
+                    display: {% if finish_recorded %}block{% else %}none{% endif %};
+                    {% if finish_recorded %}margin-top: 16px;{% else %}padding: 16px 20px; border-top: 1px solid #eee;{% endif %}
+                "
+            >
+                <button class="btn-success" id="next-btn" onclick="nextSample()">Next Sample &rarr;</button>
+                <span id="queue-done-msg" style="display: none; color: #065f46; font-weight: 600; font-size: 1.1em">
+                    All samples scored! You can close this page.
+                </span>
+            </div>
+            {% endif %}
+        </div>{# .section (Submit Score) #}
+        {% if not finish_recorded %}
+        <div class="row-resizer" data-panel="score" data-pair="1"></div>
+        {% endif %}
+        </div>{# .panel-cell #}
+        <div class="col-resizer" data-pair="1"></div>
+        <div class="panel-cell">
+            <details id="scratchpad-section" data-panel="scratchpad" data-fill>
+                <summary
+                    >Scratch pad<span class="scratchpad-actions"
+                        ><button type="button" class="btn-neutral scratchpad-scope-btn" id="scratchpad-save-task" disabled>
+                            Save to task</button
+                        ><button
+                            type="button"
+                            class="btn-neutral scratchpad-scope-btn"
+                            id="scratchpad-save-variant"
+                            disabled
+                        >
+                            Save to variant</button
+                        ></span
+                    ></summary
+                >
+                <div class="content">
+                    <textarea
+                        id="scratchpad-textarea"
+                        placeholder="Notes for this sample. Saved automatically. Not submitted, not pushed to Hawk."
+                    >
+{{ scratchpad_content }}</textarea
+                    >
+                    <p id="scratchpad-status"></p>
+                </div>
+            </details>
+            <div class="row-resizer" data-panel="scratchpad" data-pair="1"></div>
+        </div>
+        </div>{# .panel-pair #}
+        <div class="row-resizer" data-pair="1"></div>
+        {# Submit feedback: a full-width banner below the score / scratch-pad
+           pair, like the other banners, so it reads the same in one- and
+           two-column layouts. #}
+        <div id="result"></div>
+        <aside
+            class="prior-scores-panel"
+            id="prior-scores-panel"
+            aria-label="Your prior scores for this sample"
+        >
+            <div class="prior-scores-resize-handle" id="prior-scores-resize" title="Drag to resize"></div>
+            <button
+                type="button"
+                class="prior-scores-toggle"
+                id="prior-scores-toggle"
+                aria-controls="prior-scores-panel"
+                title="Toggle prior scores"
+            >
+                <span class="prior-scores-toggle-icon" aria-hidden="true">›</span>
+                <span class="prior-scores-toggle-label">Your scores</span>
+            </button>
+            <div class="prior-scores-body">
+                <h3 class="prior-scores-title">Your scores for this sample</h3>
+                <p class="prior-scores-hint">
+                    ScoreEvents are immutable &mdash; each submit appends a new row.
+                    Use the history to calibrate against your prior attempts.
+                </p>
+                <ul id="prior-scores-list" class="prior-scores-list"></ul>
+                <p id="prior-scores-empty" class="prior-scores-empty">
+                    No scores yet for this sample.
+                </p>
+            </div>
+        </aside>
+        <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+        <div class="bottom-row">
+            <div class="section bottom-section" id="container-section">
+                <label
+                    style="
+                        display: inline-flex;
+                        align-items: center;
+                        gap: 6px;
+                        font-size: 0.8em;
+                        font-weight: normal;
+                        float: right;
+                        margin-top: 2px;
+                        cursor: pointer;
+                    "
+                >
+                    <input type="checkbox" id="attach-cb" {% if attach %}checked{% endif %} onchange="toggleAttach()" />
+                    Attach VS Code
+                </label>
+                <label
+                    style="
+                        display: inline-flex;
+                        align-items: center;
+                        gap: 6px;
+                        font-size: 0.8em;
+                        font-weight: normal;
+                        float: right;
+                        margin-top: 2px;
+                        margin-right: 12px;
+                        cursor: pointer;
+                    "
+                >
+                    <input
+                        type="checkbox"
+                        id="autostart-cb"
+                        {% if not cli_no_container %}checked{% endif %}
+                        onchange="toggleAutostart()"
+                    />
+                    Auto-start containers
+                </label>
+                <div id="container-idle" {% if initial_section !="container-idle" %}style="display: none" {% endif %}>
+                    <h2>Container</h2>
+                    <button
+                        class="btn-success"
+                        id="start-container-btn"
+                        onclick="startContainer()"
+                        style="margin-top: 8px"
+                    >
+                        Start Container
+                    </button>
+                </div>
+                <div id="setup-progress" {% if initial_section !="setup-progress" %}style="display: none" {% endif %}>
+                    <h2>Docker Environment</h2>
+                    <p id="setup-status-text" style="color: #666; margin-top: 8px">Setting up Docker environment...</p>
+                </div>
+                <div id="container-ready" {% if initial_section !="container-ready" %}style="display: none" {% endif %}>
+                    <h2>Container</h2>
+                    <div
+                        id="dep-warning"
+                        style="
+                            display: none;
+                            margin: 8px 0;
+                            padding: 8px 12px;
+                            border-radius: 6px;
+                            background: #fef3c7;
+                            color: #92400e;
+                            border: 1px solid #fcd34d;
+                            font-size: 0.9em;
+                        "
+                    ></div>
+                    <p style="margin-bottom: 8px">Click to copy:</p>
+                    <div
+                        class="connection"
+                        id="container-exec-cmd"
+                        onclick="navigator.clipboard.writeText(this.textContent.trim())"
+                    >
+                        docker exec -it {{ container_name }} bash
+                    </div>
+                    <p style="margin-top: 8px; font-size: 0.85em">
+                        Or in VS Code: <em>Dev Containers: Attach to Running Container</em> &rarr;
+                        <code id="container-name-label">{{ container_name }}</code>
+                    </p>
+                    <div style="margin-top: 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
+                        <button class="btn-danger" onclick="cleanup()">Stop &amp; Remove Container</button>
+                        <button class="btn-primary" id="open-vscode-btn" onclick="openInVscode()">
+                            Open in VS Code
+                        </button>
+                        <span id="novnc-section">
+                            <button class="btn-neutral" id="novnc-btn" onclick="setupDisplay()">
+                                Install noVNC Display
+                            </button>
+                            <span
+                                id="novnc-status"
+                                style="display: none; font-size: 0.85em; color: #666; margin-left: 8px"
+                            ></span>
+                            <span id="novnc-link" style="display: none; font-size: 0.85em"></span>
+                        </span>
+                    </div>
+                </div>
+                <div id="setup-error" {% if initial_section !="setup-error" %}style="display: none" {% endif %}>
+                    <h2 style="color: #991b1b">Docker Setup Failed</h2>
+                    <p id="setup-error-text" style="color: #991b1b; margin-top: 8px"></p>
+                    <p style="margin-top: 12px">
+                        <button class="btn-warning" onclick="retrySetup()" id="retry-btn">Retry</button>
+                        {% if mode != "single" and not has_local_history %}
+                        <button type="button" class="btn-neutral" onclick="skipSample()" style="margin-left: 4px">
+                            Skip
+                        </button>
+                        {% endif %}
+                    </p>
+                </div>
+                <div
+                    id="hawkless-blocked"
+                    {% if initial_section != "hawkless-blocked" %}style="display: none"{% endif %}
+                >
+                    <h2 style="color: #92400e">Container unavailable in hawkless mode</h2>
+                    <p id="hawkless-blocked-text" style="color: #78350f; margin-top: 8px; white-space: pre-wrap">
+                        {{ hawkless_blocked_message }}
+                    </p>
+                    <p style="margin-top: 12px">
+                        <button class="btn-warning" onclick="retrySetup()">Retry</button>
+                        {% if mode != "single" and not has_local_history %}
+                        <button type="button" class="btn-neutral" onclick="skipSample()" style="margin-left: 4px">
+                            Skip
+                        </button>
+                        {% endif %}
+                    </p>
+                </div>
+            </div>
+
+            <div class="section bottom-section">
+                <button class="btn-primary" onclick="openArtifacts()" id="open-artifacts-btn">
+                    Open Artifacts Folder
+                </button>
+                <button
+                    class="btn-neutral btn-row-gap"
+                    onclick="openConfig()"
+                    id="open-config-btn"
+                    title="Open config.json in a text editor (changes apply on next manual-score run)"
+                >
+                    Config
+                </button>
+                <button
+                    class="btn-neutral btn-row-gap"
+                    onclick="window.location.href = '/tasks'"
+                    id="tasks-btn"
+                    title="Change which tasks are included in the queue"
+                >
+                    Select Tasks
+                </button>
+                {% if not show_queue_progress %}
+                <button class="btn-danger btn-row-gap" onclick="exitTool()" id="exit-btn">Exit</button>
+                {% endif %}
+            </div>
+        </div>
+
+        <script>
+            // Set when the page rendered from cached metadata instead of a
+            // fresh Hawk fetch (see /api/navigate fast path). Triggers a
+            // background /api/refresh-info call that updates the run-info
+            // fields in place and shows the "Data updated from Hawk" pill
+            // if anything differs.
+            const INFO_NEEDS_REFRESH = {{ info_needs_refresh | tojson }};
+            const HAWK_MODE = {{ hawk | tojson }};
+            // Mutable: refreshed after every successful stash POST so the
+            // Restore button always pulls in the most recently stashed
+            // values, even if the user has stashed several times this
+            // session without reloading.
+            let currentStash = {{ stash | tojson if stash else 'null' }};
+            // Most-invested history entry by this scorer (max
+            // ``minutes_spent_scoring``, independent of the stash). Used
+            // by the Reload button on the history banner; refreshed
+            // after every successful submit.
+            let mostInvestedHistory = {{ most_invested_history | tojson if most_invested_history else 'null' }};
+            // All history entries by this scorer. Powers the client-side
+            // dedup check so Submit stays disabled when the form matches
+            // any prior submission (the server enforces the same rule and
+            // would return 400; we just front-run it for the UX). Updated
+            // in place on every successful submit.
+            const historyEntries = {{ history_entries | tojson }};
+            // Highest minutes_to_score from any prior submission by this
+            // scorer (Hawk row + local history). Refreshed from the submit
+            // response so a resubmit with lower minutes still warns.
+            let priorMaxMinutes = {{ prior_max_minutes | tojson }};
+            // Clearing behavior after a successful submit. Values:
+            // "none" (keep fields), "text" (clear explanation only), "scores"
+            // (clear value + minutes, keep explanation), "all" (clear value +
+            // minutes + explanation). Comes from config.json via
+            // `manual-score config set clear_on_submit <mode>`.
+            const CLEAR_ON_SUBMIT = {{ clear_on_submit | tojson }};
+            // Task/variant scratch-pad scopes. The textarea auto-saves per
+            // sample; the header buttons promote its content to a reusable
+            // note that seeds other samples of the same task/variant (load
+            // precedence: per-sample > variant > task). Stored values are
+            // mirrored here so a button can disable itself when saving would
+            // be a no-op.
+            const SCRATCHPAD_TASK_NAME = {{ info.task_name | tojson }};
+            const SCRATCHPAD_VARIANT = {{ info.task_variant | tojson }};
+            let scratchpadTaskStored = {{ task_scratchpad_content | tojson }};
+            let scratchpadVariantStored = {{ variant_scratchpad_content | tojson }};
+
+            function fieldEl(fieldName) {
+                const form = document.getElementById("score-form");
+                if (!form) return null;
+                return form.querySelector(`[data-field="${fieldName}"]`);
+            }
+
+            // Form is absent on finished samples (the box renders a finished
+            // message instead); downstream form-dependent setup no-ops via
+            // its own null guards.
+            const scoreForm = document.getElementById("score-form");
+            if (scoreForm) scoreForm.reset();
+
+            // Initial pre-fill: in-progress stash wins over the
+            // most-invested submitted history entry (mirrors the
+            // precedence noted in the stash banner). Either source has
+            // the same flat form shape (value/minutes_to_score/explanation).
+            const initialPrefill = currentStash || mostInvestedHistory;
+            if (initialPrefill) {
+                ["value", "minutes_to_score", "explanation"].forEach(f => {
+                    if (initialPrefill[f] === undefined) return;
+                    const el = fieldEl(f);
+                    if (el) el.value = String(initialPrefill[f]);
+                });
+            }
+
+            document.querySelectorAll(".score-group textarea").forEach(ta => {
+                ta.addEventListener("keydown", function (e) {
+                    if (e.key === "Tab") {
+                        e.preventDefault();
+                        const start = this.selectionStart;
+                        const end = this.selectionEnd;
+                        this.value = this.value.substring(0, start) + "    " + this.value.substring(end);
+                        this.selectionStart = this.selectionEnd = start + 4;
+                    }
+                });
+            });
+
+            const statusMessages = {
+                downloading: "Downloading artifacts...",
+                pulling: "Pulling Docker image...",
+                starting: "Starting container...",
+                ready: "ready",
+                error: "error",
+            };
+
+            function formatTimer(seconds) {
+                if (!isFinite(seconds) || seconds < 0) seconds = 0;
+                const s = Math.floor(seconds);
+                const h = Math.floor(s / 3600);
+                const m = Math.floor((s % 3600) / 60);
+                const sec = s % 60;
+                const pad = n => String(n).padStart(2, "0");
+                if (h > 0) return `${h}:${pad(m)}:${pad(sec)}`;
+                return `${m}:${pad(sec)}`;
+            }
+
+            // Stopwatch-style timer that supports init (set the moment elapsed
+            // starts counting), pause (freeze the display), and resume (shift
+            // the anchor forward by the pause duration so elapsed picks up
+            // where it left off). Calling pause() before init() captures the
+            // intent so a later init() doesn't accidentally start a paused
+            // timer running.
+            function makeTimer(elementId) {
+                let startMs = null;
+                let pausedAt = null;
+                let interval = null;
+
+                function elapsed() {
+                    if (startMs === null) return 0;
+                    const end = pausedAt !== null ? pausedAt : Date.now();
+                    return (end - startMs) / 1000;
+                }
+
+                function render() {
+                    const el = document.getElementById(elementId);
+                    if (el) el.textContent = formatTimer(elapsed());
+                }
+
+                function ensureTicking() {
+                    if (interval || pausedAt !== null || startMs === null) return;
+                    interval = setInterval(render, 1000);
+                }
+
+                return {
+                    init(anchorMs) {
+                        if (startMs !== null) return;
+                        startMs = anchorMs;
+                        render();
+                        ensureTicking();
+                    },
+                    pause() {
+                        if (pausedAt !== null) return;
+                        if (startMs === null) {
+                            // Mark "paused at zero" so a later init() doesn't
+                            // start it running.
+                            startMs = Date.now();
+                            pausedAt = startMs;
+                        } else {
+                            pausedAt = Date.now();
+                        }
+                        if (interval) { clearInterval(interval); interval = null; }
+                        render();
+                    },
+                    resume() {
+                        if (pausedAt === null || startMs === null) return;
+                        startMs += Date.now() - pausedAt;
+                        pausedAt = null;
+                        render();
+                        ensureTicking();
+                    },
+                    reset() {
+                        if (interval) { clearInterval(interval); interval = null; }
+                        startMs = null;
+                        pausedAt = null;
+                        render();
+                    },
+                    // Rehydrate accumulated time from a persisted snapshot and
+                    // park (paused) at it. We deliberately ignore how much
+                    // wall-clock passed since the snapshot was written: the page
+                    // was closed or on another sample, which isn't scoring time.
+                    // The clock resumes only on a real work signal (container
+                    // attach, Open in VS Code, or manual Resume). After restore
+                    // isInitialized() is true, so later init() calls are no-ops.
+                    restore(elapsedSec) {
+                        if (interval) { clearInterval(interval); interval = null; }
+                        const elapsedMs = Math.max(0, Number(elapsedSec) || 0) * 1000;
+                        pausedAt = Date.now();
+                        startMs = pausedAt - elapsedMs;
+                        render();
+                    },
+                    snapshot() {
+                        if (startMs === null) return null;
+                        return { elapsed_seconds: elapsed() };
+                    },
+                    isInitialized() {
+                        return startMs !== null;
+                    },
+                    isRunning() {
+                        return startMs !== null && pausedAt === null;
+                    },
+                };
+            }
+
+            const normalTimer = makeTimer("normal-timer");
+
+            // Post-submit, fields stay editable so the user can keep iterating
+            // — the local-history schema lets a sample be re-submitted to
+            // append a new entry.
+            // We check the form against every prior history entry for this
+            // scorer and disable Submit when the form would be a duplicate
+            // — the server enforces the same rule and would return 400; we
+            // front-run it to avoid the round-trip and surface the reason
+            // in the button's tooltip instead.
+            const TRACKED_INPUT_FIELDS = ["value", "minutes_to_score", "explanation"];
+            let submitListenersWired = false;
+
+            function snapshotForm() {
+                const snap = {};
+                TRACKED_INPUT_FIELDS.forEach(f => {
+                    const el = fieldEl(f);
+                    snap[f] = el ? el.value : "";
+                });
+                return snap;
+            }
+
+            // Clearing applied after a successful submit. "text" blanks just
+            // the explanation textarea; "scores" blanks the value and minutes
+            // inputs but keeps the explanation; "all" blanks every tracked
+            // input. Synthetic input events refresh the button-sync listeners
+            // that watch the fields. Returns true if any field was actually
+            // mutated so the caller can decide whether to refresh dependent
+            // UI (snapshots, button).
+            function applyClearOnSubmit() {
+                const FIELDS_BY_MODE = {
+                    all: TRACKED_INPUT_FIELDS,
+                    scores: ["value", "minutes_to_score"],
+                    text: ["explanation"],
+                };
+                const fields = FIELDS_BY_MODE[CLEAR_ON_SUBMIT];
+                if (!fields) return false;
+                let cleared = false;
+                fields.forEach(f => {
+                    const el = fieldEl(f);
+                    if (!el || el.value === "") return;
+                    el.value = "";
+                    el.dispatchEvent(new Event("input", { bubbles: true }));
+                    cleared = true;
+                });
+                return cleared;
+            }
+
+            // Flat form payload in the same shape as a server history entry
+            // (numbers for numeric fields, trimmed strings for explanations,
+            // missing keys for empty fields). Used for the dedup comparison.
+            function collectFormForCompare() {
+                const data = {};
+                const vEl = fieldEl("value");
+                if (vEl && vEl.value !== "") {
+                    const n = parseFloat(vEl.value);
+                    if (!isNaN(n)) data.value = n;
+                }
+                const mEl = fieldEl("minutes_to_score");
+                if (mEl && mEl.value !== "") {
+                    const n = parseFloat(mEl.value);
+                    if (!isNaN(n)) data.minutes_to_score = n;
+                }
+                const eEl = fieldEl("explanation");
+                if (eEl) {
+                    const t = eEl.value.trim();
+                    if (t) data.explanation = t;
+                }
+                return data;
+            }
+
+            function formsEqual(a, b) {
+                return TRACKED_INPUT_FIELDS.every(f => a[f] === b[f]);
+            }
+
+            // Quick-reject by minutes_to_score before falling back to a full
+            // field comparison. With dozens of history rows this saves most
+            // of the work; with a handful it's a wash.
+            function formMatchesAnyHistory() {
+                if (!historyEntries.length) return false;
+                const form = collectFormForCompare();
+                for (const entry of historyEntries) {
+                    if (form.minutes_to_score !== entry.minutes_to_score) continue;
+                    if (formsEqual(form, entry)) return true;
+                }
+                return false;
+            }
+
+            // Breakdown of what's missing or out-of-range. Used by the Submit
+            // tooltip so the user sees concrete reasons instead of a silent
+            // disabled state.
+            function submitDisabledReasons() {
+                const reasons = [];
+                const valueEl = fieldEl("value");
+                const minEl = fieldEl("minutes_to_score");
+                const expEl = fieldEl("explanation");
+                const rawValue = valueEl ? valueEl.value.trim() : "";
+                const rawMinutes = minEl ? minEl.value.trim() : "";
+                const rawExp = expEl ? expEl.value.trim() : "";
+                const valueNum = parseFloat(rawValue);
+                const hasValue = rawValue !== "" && !isNaN(valueNum) && valueNum >= 0 && valueNum <= 1;
+                const minNum = parseFloat(rawMinutes);
+                const hasMinutes = rawMinutes !== "" && !isNaN(minNum) && minNum >= 0;
+                const hasExp = rawExp !== "";
+                if (rawValue !== "" && !hasValue) {
+                    reasons.push("Score must be a number between 0 and 1");
+                }
+                if (rawMinutes !== "" && !hasMinutes) {
+                    reasons.push("Minutes to score must be a non-negative number");
+                }
+                if (!hasValue) {
+                    reasons.push("Score is required");
+                }
+                if (!hasMinutes) {
+                    reasons.push("Minutes to score is required");
+                }
+                if (!hasExp) {
+                    reasons.push("Explanation is required");
+                }
+                if (formMatchesAnyHistory()) {
+                    reasons.push("These exact values were already submitted — edit a field to submit again.");
+                }
+                return reasons;
+            }
+
+            function syncSubmitButton() {
+                const btn = document.getElementById("submit-btn");
+                if (!btn) return;
+                const reasons = submitDisabledReasons();
+                btn.disabled = reasons.length > 0;
+                btn.title = reasons.length > 0
+                    ? "Can't submit:\n• " + reasons.join("\n• ")
+                    : "";
+            }
+
+            // Stash is allowed any time the form has *something* in it —
+            // unlike Submit, it doesn't care whether the values match a
+            // prior submission. Empty-form stashes are pointless (and would
+            // create a draft holding only the scorer name), so disable.
+            function syncStashButton() {
+                const btn = document.getElementById("stash-btn");
+                if (!btn) return;
+                const empty = TRACKED_INPUT_FIELDS.every(f => {
+                    const el = fieldEl(f);
+                    return !el || el.value === "";
+                });
+                btn.disabled = empty;
+            }
+
+            function wireSubmitListeners() {
+                if (submitListenersWired) return;
+                submitListenersWired = true;
+                TRACKED_INPUT_FIELDS.forEach(f => {
+                    const el = fieldEl(f);
+                    if (!el) return;
+                    el.addEventListener("input", () => {
+                        syncSubmitButton();
+                        syncStashButton();
+                    });
+                });
+            }
+
+            // Dirty-check auto-stash: snapshot the form right after pre-fill,
+            // and again after every explicit save (submit / stash / drop).
+            // Navigation handlers call autoStashIfDirty() so unsaved edits
+            // get persisted before we navigate away — but only when the form
+            // genuinely differs from the saved baseline, so a quick "peek
+            // the summary list" navigation doesn't grow tracking.json.
+            let savedSnapshot = snapshotForm();
+
+            // Submit is gated by submitDisabledReasons() — which checks
+            // both field validity AND a dedup against every history entry —
+            // so no separate "last submitted snapshot" is needed.
+            wireSubmitListeners();
+            syncSubmitButton();
+            syncStashButton();
+
+            function captureSavedSnapshot() {
+                savedSnapshot = snapshotForm();
+            }
+
+            function isFormDirty() {
+                if (!savedSnapshot) return false;
+                return TRACKED_INPUT_FIELDS.some(f => {
+                    const el = fieldEl(f);
+                    return el && el.value !== (savedSnapshot[f] || "");
+                });
+            }
+
+            async function autoStashIfDirty() {
+                if (!isFormDirty()) return;
+                try {
+                    const body = collectForm();
+                    await fetch("/api/stash", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(body),
+                    });
+                    captureSavedSnapshot();
+                } catch (err) {
+                    // Don't block navigation if the stash POST fails — the
+                    // user will be back on this sample momentarily anyway,
+                    // and we don't want a transient network blip to trap
+                    // them on the page.
+                    console.warn("auto-stash failed:", err);
+                }
+            }
+
+            // Global pause snapshot: remember which timers were running at the
+            // moment of pause so resume only unpauses those. A timer that the
+            // user later starts mid-pause (e.g. checking Done) keeps its own
+            // state and isn't touched on resume.
+            let globalPauseSnapshot = null;
+
+            const PAUSE_TIMER_HOTKEY = {{ pause_timer_hotkey | tojson }};
+            // Pause/Resume share one button: warning amber for "stop the
+            // clock" (matches Stash), success green for "start ticking"
+            // (matches Next Sample). Toggle classes — colors come from the
+            // palette so any later palette change applies here too.
+            function applyPauseBtnState(running) {
+                const btn = document.getElementById("pause-timers-btn");
+                const icon = document.getElementById("pause-timers-icon");
+                const label = document.getElementById("pause-timers-label");
+                if (!btn || !icon || !label) return;
+                btn.classList.toggle("btn-warning", running);
+                btn.classList.toggle("btn-success", !running);
+                icon.textContent = running ? "⏸" : "▶";
+                label.textContent = running ? "Pause Timer" : "Resume Timer";
+            }
+
+            // Persisted in <uuid>/_score.json under "timers" so a sample
+            // switch and back restores the stopwatch where it left off.
+            const TIMER_STATE_INIT = {{ timer_state | tojson }};
+
+            function buildTimerStatePayload() {
+                const snap = normalTimer.snapshot();
+                return snap ? { normal: snap } : {};
+            }
+
+            // Returns the fetch promise so callers that must guarantee the write
+            // lands (the exit path) can await it; everywhere else it's
+            // fire-and-forget and a transient failure is retried by the next
+            // event (pause/resume/pagehide/periodic).
+            function saveTimerStateNow() {
+                return fetch("/api/timer-state", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(buildTimerStatePayload()),
+                }).catch(err => console.warn("timer save failed:", err));
+            }
+
+            function togglePauseTimers() {
+                if (globalPauseSnapshot === null) {
+                    globalPauseSnapshot = { normal: normalTimer.isRunning() };
+                    if (globalPauseSnapshot.normal) normalTimer.pause();
+                    applyPauseBtnState(false);
+                } else {
+                    if (globalPauseSnapshot.normal) normalTimer.resume();
+                    globalPauseSnapshot = null;
+                    applyPauseBtnState(true);
+                }
+                saveTimerStateNow();
+            }
+
+            // Begin (or resume) timing because the user has started working in
+            // the container — VS Code loaded (auto-attach) or the user clicked
+            // Open in VS Code. Idempotent: a no-op if the active timer is
+            // already running, so repeat calls are safe.
+            function ensureTimersRunning() {
+                if (globalPauseSnapshot !== null) {
+                    // Globally paused (the default fresh-load state): resume the
+                    // parked timers via the same path the Resume button uses.
+                    togglePauseTimers();
+                    return;
+                }
+                if (normalTimer.isRunning()) return;
+                if (normalTimer.isInitialized()) {
+                    normalTimer.resume();
+                } else {
+                    normalTimer.init(Date.now());
+                }
+                saveTimerStateNow();
+            }
+
+            // Auto-start the timer once the container is ready and the server
+            // actually launched VS Code into it (best-effort proxy for "VS Code
+            // loaded", falling back to container-ready timing). We key off the
+            // recorded outcome `data.attached`, NOT the live "Attach VS Code"
+            // setting: toggling that setting on doesn't retroactively open VS
+            // Code, so the timer must not start until a window really opened.
+            // Fires at most once per page load (the one-shot guard), so the 5s
+            // ready-poll can't repeatedly resume a timer the user paused after
+            // attach. It DOES resume a paused timer that already holds time:
+            // re-opening a half-scored sample and attaching VS Code means work
+            // is resuming, so the accumulated elapsed must keep counting. When
+            // VS Code wasn't auto-launched (Attach VS Code off, or no `code` on
+            // PATH) the timer starts from the user's explicit Open in VS Code
+            // click instead.
+            let containerTimerAutoStarted = false;
+            function autoStartTimerForContainer() {
+                if (containerTimerAutoStarted) return;
+                containerTimerAutoStarted = true;
+                if (normalTimer.isRunning()) return;
+                ensureTimersRunning();
+            }
+
+            // On every page load the stopwatch starts parked (paused): rehydrate
+            // accumulated time if a snapshot exists, otherwise sit at 0:00. It
+            // stays parked until a real work signal resumes it (container
+            // attach/auto-attach, Open in VS Code, or manual Resume), so time
+            // spent closed, downloading, or on another sample never counts.
+            // Initialized timers are sticky against future init() calls, so
+            // applyContainerState's container-ready path can't re-anchor it.
+            if (TIMER_STATE_INIT && TIMER_STATE_INIT.normal) {
+                normalTimer.restore(TIMER_STATE_INIT.normal.elapsed_seconds);
+            } else {
+                normalTimer.pause();
+            }
+            globalPauseSnapshot = { normal: true };
+            applyPauseBtnState(false);
+            saveTimerStateNow();
+
+            // Persist the running clock periodically so an unclean shutdown
+            // (kill, crash, power loss) loses at most one interval of elapsed
+            // time rather than everything since the last pause/resume. No-op
+            // while parked.
+            setInterval(() => {
+                if (normalTimer.isRunning()) saveTimerStateNow();
+            }, 15000);
+
+            if (PAUSE_TIMER_HOTKEY) {
+                // Plain-key hotkey: ignore when a modifier is held so combos
+                // (Ctrl+P print, Alt+P browser menu, etc.) keep working.
+                // Pause/Break and similar non-character keys don't interact
+                // with text fields, so we don't gate on focus.
+                document.addEventListener("keydown", e => {
+                    if (e.key !== PAUSE_TIMER_HOTKEY) return;
+                    if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+                    e.preventDefault();
+                    togglePauseTimers();
+                });
+            }
+
+            // Catch-all save for navigation paths that don't trigger an
+            // explicit timer event: closing the tab, hard reload, navigating
+            // via Next/Skip/Summary, etc. sendBeacon is fire-and-forget but
+            // guaranteed to complete even after the page unloads.
+            window.addEventListener("pagehide", () => {
+                const payload = buildTimerStatePayload();
+                if (navigator.sendBeacon) {
+                    const blob = new Blob(
+                        [JSON.stringify(payload)],
+                        { type: "application/json" },
+                    );
+                    navigator.sendBeacon("/api/timer-state", blob);
+                }
+            });
+
+            function resetTimers() {
+                if (!confirm("Reset timer to 0:00? This can't be undone.")) return;
+                const wasGloballyPaused = globalPauseSnapshot !== null;
+                normalTimer.reset();
+                // Re-anchor the timer to "now" so the user resumes counting
+                // from zero. Under global pause, init+pause so Resume Timer
+                // continues to work.
+                normalTimer.init(Date.now());
+                if (wasGloballyPaused) {
+                    normalTimer.pause();
+                    globalPauseSnapshot = { normal: true };
+                }
+                saveTimerStateNow();
+            }
+
+            const SECTION_IDS = ["container-idle", "setup-progress", "container-ready", "setup-error", "hawkless-blocked"];
+            function showSection(id) {
+                SECTION_IDS.forEach(s => {
+                    var el = document.getElementById(s);
+                    if (el) el.style.display = (s === id) ? "block" : "none";
+                });
+            }
+
+            function applyContainerState(data) {
+                if (data.status === "error") {
+                    showSection("setup-error");
+                    document.getElementById("setup-error-text").textContent = data.message || "Unknown error";
+                    return;
+                }
+                if (data.status === "hawkless-blocked") {
+                    showSection("hawkless-blocked");
+                    document.getElementById("hawkless-blocked-text").textContent = data.message || "";
+                    return;
+                }
+                if (data.status === "downloading" || data.status === "pulling" || data.status === "starting") {
+                    showSection("setup-progress");
+                    document.getElementById("setup-status-text").textContent =
+                        statusMessages[data.status] || "Setting up...";
+                    return;
+                }
+                // status is "ready" or "idle" — UI driven by whether the container actually exists
+                if (data.container_exists) {
+                    showSection("container-ready");
+                    const warns = data.dep_warnings || [];
+                    const depBanner = document.getElementById("dep-warning");
+                    if (depBanner) {
+                        if (warns.length) {
+                            depBanner.textContent =
+                                "⚠ Declared dependencies that couldn't be installed in the task " +
+                                "environment: " + warns.join(", ") + ". The sample was launched without " +
+                                "them — a requirements.txt that doesn't install cleanly is likely " +
+                                "an agent mistake.";
+                            depBanner.style.display = "block";
+                        } else {
+                            depBanner.style.display = "none";
+                        }
+                    }
+                    if (data.gui) document.getElementById("novnc-section").style.display = "none";
+                    // Auto-attach runs server-side, so the browser never sees an
+                    // Open in VS Code click. When the server reports it attached,
+                    // start the timer here instead.
+                    if (data.attached) autoStartTimerForContainer();
+                    return;
+                }
+                showSection("container-idle");
+                const startBtn = document.getElementById("start-container-btn");
+                if (startBtn) { startBtn.disabled = false; startBtn.textContent = "Start Container"; }
+            }
+
+            async function navigateToIndex(index) {
+                await autoStashIfDirty();
+                try {
+                    const resp = await fetch("/api/navigate", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ index }),
+                    });
+                    const data = await resp.json();
+                    if (data.success) {
+                        window.location.href = "/";
+                    } else {
+                        alert("Error: " + (data.error || "Unknown"));
+                    }
+                } catch (err) {
+                    alert("Error: " + err.message);
+                }
+            }
+
+            async function goToSummary(event) {
+                if (event) event.preventDefault();
+                await autoStashIfDirty();
+                window.location.href = "/summary";
+            }
+
+            function renderOtherContainers(others) {
+                const banner = document.getElementById("other-container-banner");
+                if (!banner) return;
+                if (!others || others.length === 0) {
+                    banner.style.display = "none";
+                    banner.innerHTML = "";
+                    return;
+                }
+                banner.innerHTML = "";
+                banner.appendChild(document.createTextNode(
+                    others.length === 1
+                        ? "A container is running for another sample: "
+                        : "Containers are running for other samples: "
+                ));
+                others.forEach((o, i) => {
+                    if (i > 0) banner.appendChild(document.createTextNode(", "));
+                    const label = o.task_name && o.uuid
+                        ? `sample ${o.queue_index + 1}: ${o.task_name} / ${o.uuid}`
+                        : o.container_name;
+                    if (o.queue_index !== null && o.queue_index !== undefined) {
+                        const a = document.createElement("a");
+                        a.href = "#";
+                        a.style.color = "inherit";
+                        a.style.fontWeight = "600";
+                        a.style.textDecoration = "underline";
+                        a.textContent = label;
+                        a.addEventListener("click", e => {
+                            e.preventDefault();
+                            navigateToIndex(o.queue_index);
+                        });
+                        banner.appendChild(a);
+                    } else {
+                        const code = document.createElement("code");
+                        code.textContent = label;
+                        banner.appendChild(code);
+                    }
+                    const stopBtn = document.createElement("button");
+                    stopBtn.type = "button";
+                    stopBtn.textContent = "Stop";
+                    stopBtn.style.marginLeft = "8px";
+                    stopBtn.style.padding = "2px 8px";
+                    stopBtn.style.fontSize = "0.85em";
+                    stopBtn.style.background = "#dc2626";
+                    stopBtn.addEventListener("click", async () => {
+                        stopBtn.disabled = true;
+                        stopBtn.textContent = "Stopping...";
+                        try {
+                            // The server blocks until docker stop completes,
+                            // so by the time we poll the container is really gone.
+                            await fetch("/api/stop-other-container", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ container_name: o.container_name }),
+                            });
+                            pollSetupStatus();
+                        } catch (err) {
+                            alert("Error: " + err.message);
+                            stopBtn.disabled = false;
+                            stopBtn.textContent = "Stop";
+                        }
+                    });
+                    banner.appendChild(stopBtn);
+                });
+                banner.appendChild(document.createTextNode(
+                    ". Starting a new container here also works."
+                ));
+                banner.style.display = "block";
+            }
+
+            let pollTimeout = null;
+            async function pollSetupStatus() {
+                if (pollTimeout) { clearTimeout(pollTimeout); pollTimeout = null; }
+                let nextDelay = 2000;
+                try {
+                    const resp = await fetch("/api/setup-status");
+                    const data = await resp.json();
+                    applyContainerState(data);
+                    renderOtherContainers(data.other_containers);
+                    // Poll less aggressively once steady; we keep polling so external
+                    // `docker stop`/`docker rm` is reflected in the UI.
+                    if (data.status === "ready" && data.container_exists) nextDelay = 5000;
+                    if (data.status === "error") return;
+                } catch { /* fall through and retry */ }
+                pollTimeout = setTimeout(pollSetupStatus, nextDelay);
+            }
+
+            pollSetupStatus();
+
+            // Per-field formatters for /api/refresh-info's JSON payload.
+            // Mirrors the Jinja template's display formatting so a refreshed
+            // value drops in looking identical to a server-rendered one.
+            function fmtDurationJS(seconds) {
+                if (seconds === null || seconds === undefined) return "?";
+                const h = Math.floor(seconds / 3600);
+                const m = Math.floor((seconds % 3600) / 60);
+                return h > 0 ? `${h}h ${m}m` : `${m}m`;
+            }
+            function fmtTokensJS(n) {
+                if (n === null || n === undefined) return "?";
+                if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+                if (n >= 1_000) return Math.round(n / 1_000) + "K";
+                return String(n);
+            }
+            function fmtIntJS(n) { return n === null || n === undefined ? "?" : String(n); }
+            function fmtCommaJS(n) {
+                return n === null || n === undefined ? "?" : n.toLocaleString("en-US");
+            }
+            function infoFieldValue(field, info) {
+                switch (field) {
+                    case "model": return info.model || "?";
+                    case "task_variant": return info.task_variant || "?";
+                    case "task_version": return info.task_version || "?";
+                    case "eval_set_id": return info.eval_set_id || "?";
+                    case "created_by": return info.created_by || "?";
+                    case "duration":
+                        return `${fmtDurationJS(info.working_time_seconds)} working / ${fmtDurationJS(info.total_time_seconds)} total`;
+                    case "total_tokens_short": return fmtTokensJS(info.total_tokens);
+                    case "message_count": return fmtIntJS(info.message_count);
+                    case "action_count": return fmtIntJS(info.action_count);
+                    case "status": return info.status || "?";
+                    case "title-task": {
+                        const name = info.task_name || "";
+                        return info.task_variant ? `${name} / ${info.task_variant}` : name;
+                    }
+                    default: return null;
+                }
+            }
+            function buildTokenTooltip(info) {
+                return [
+                    `Input: ${fmtCommaJS(info.input_tokens)}`,
+                    `Cache read: ${fmtCommaJS(info.cache_read_tokens)}`,
+                    `Cache write: ${fmtCommaJS(info.cache_write_tokens)}`,
+                    `Output: ${fmtCommaJS(info.output_tokens)}`,
+                    `Reasoning: ${fmtCommaJS(info.reasoning_tokens)}`,
+                    `Total: ${fmtCommaJS(info.total_tokens)}`,
+                ].join("\n");
+            }
+
+            function applyRefreshedInfo(info, changedFields) {
+                document.querySelectorAll("[data-info-field]").forEach(el => {
+                    const field = el.dataset.infoField;
+                    if (field === "tokens-tooltip") {
+                        el.title = buildTokenTooltip(info);
+                        return;
+                    }
+                    const v = infoFieldValue(field, info);
+                    if (v !== null) el.textContent = v;
+                });
+                const viewerLink = document.getElementById("viewer-url-link");
+                if (viewerLink) {
+                    if (info.viewer_url) {
+                        viewerLink.href = info.viewer_url;
+                        viewerLink.style.display = "";
+                    } else {
+                        viewerLink.removeAttribute("href");
+                        viewerLink.style.display = "none";
+                    }
+                }
+                const titleEl = document.querySelector("title");
+                if (titleEl) {
+                    const variant = info.task_variant ? ` / ${info.task_variant}` : "";
+                    titleEl.textContent = `${info.task_name || ""}${variant} / {{ uuid }}`;
+                }
+                if (changedFields && changedFields.length > 0) {
+                    const pill = document.getElementById("info-refresh-pill");
+                    if (pill) {
+                        pill.style.display = "inline-block";
+                        pill.title = "Local cache was outdated. Updated fields: "
+                            + changedFields.join(", ");
+                    }
+                }
+            }
+
+            async function refreshInfoFromHawk() {
+                const spinner = document.getElementById("info-refresh-spinner");
+                const fetchingBanner = document.getElementById("info-fetching-banner");
+                if (spinner) spinner.style.display = "inline-block";
+                let succeeded = false;
+                try {
+                    const resp = await fetch("/api/refresh-info", { method: "POST" });
+                    const data = await resp.json();
+                    if (!data.success) return;
+                    succeeded = true;
+                    // No prior metadata -> the run-info section and instructions
+                    // panels weren't in the DOM. Reload so the template renders
+                    // them with the freshly-cached values. autoStashIfDirty
+                    // preserves any in-progress form state.
+                    const wasNoMetadata = {{ info.no_metadata | tojson }};
+                    const structuralChange = wasNoMetadata && data.info && !data.info.no_metadata;
+                    const instructionsChanged = (data.changed_fields || []).some(
+                        f => f === "scoring_instructions" || f === "task_instructions"
+                    );
+                    if (structuralChange || instructionsChanged) {
+                        await autoStashIfDirty();
+                        window.location.reload();
+                        return;
+                    }
+                    applyRefreshedInfo(data.info, data.changed_fields || []);
+                } catch (err) {
+                    /* Refresh is best-effort; cached data is still valid. */
+                } finally {
+                    if (spinner) spinner.style.display = "none";
+                    if (fetchingBanner && !succeeded) {
+                        // Refresh failed and we never had cached metadata.
+                        // Swap the "Fetching..." spinner banner for the static
+                        // "No cached metadata" warning so the user knows the
+                        // page won't update on its own.
+                        fetchingBanner.innerHTML = "<strong>Couldn't reach Hawk to fetch metadata.</strong>"
+                            + " <span style='flex: 1'>Cached data is unavailable for this sample."
+                            + " Check connectivity or run <code>manual-score --prefetch URL</code>"
+                            + " while Hawk is reachable.</span>";
+                    } else if (fetchingBanner && succeeded) {
+                        fetchingBanner.style.display = "none";
+                    }
+                }
+            }
+
+            if (INFO_NEEDS_REFRESH && HAWK_MODE) {
+                refreshInfoFromHawk();
+            }
+
+            function collectForm() {
+                const body = {};
+                ["value", "minutes_to_score"].forEach(f => {
+                    const el = fieldEl(f);
+                    if (el && el.value !== "") body[f] = parseFloat(el.value);
+                });
+                const expEl = fieldEl("explanation");
+                if (expEl) {
+                    const text = expEl.value.trim();
+                    if (text) body.explanation = text;
+                }
+                return body;
+            }
+
+            // The Submit/Stash result banner is transient feedback, so it
+            // carries a dismiss button. All writers go through these helpers
+            // to keep the markup and the close-button wiring in one place.
+            function showResultHtml(kind, html) {
+                const el = document.getElementById("result");
+                el.className = kind;
+                el.style.display = "flex";
+                el.innerHTML =
+                    '<span class="result-text">' + html + "</span>" +
+                    '<button type="button" class="btn-close" title="Dismiss" '
+                    + 'aria-label="Dismiss" onclick="hideResult()">&times;</button>';
+            }
+            function showResultText(kind, text) {
+                const escaped = String(text).replace(/[&<>"']/g, c => ({
+                    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+                })[c]);
+                showResultHtml(kind, escaped);
+            }
+            function hideResult() {
+                const el = document.getElementById("result");
+                el.style.display = "none";
+                el.innerHTML = "";
+            }
+
+            // ---------- Prior-scores panel + toast helpers ----------
+            // The panel is driven entirely by `historyEntries` (server-rendered
+            // on load + appended after each successful submit). No extra Hawk
+            // fetch — sync status comes from the local `submitted_to` flag set
+            // by the submit response.
+            function priorScoreView(entry) {
+                const score = (entry && entry.score) || {};
+                const meta = score.metadata || {};
+                return {
+                    value: "value" in score ? score.value : entry.value,
+                    minutes: "minutes_spent_scoring" in meta
+                        ? meta.minutes_spent_scoring
+                        : entry.minutes_to_score,
+                    explanation: "explanation" in score
+                        ? score.explanation
+                        : entry.explanation,
+                    submitted: entry.submitted_to || "local",
+                    when: entry.saved_at || meta.scored_at || "",
+                };
+            }
+            function formatRelative(iso) {
+                if (!iso) return "";
+                const t = Date.parse(iso);
+                if (isNaN(t)) return iso;
+                const diff = Math.round((Date.now() - t) / 1000);
+                if (diff < 60) return diff + "s ago";
+                if (diff < 3600) return Math.round(diff / 60) + "m ago";
+                if (diff < 86400) return Math.round(diff / 3600) + "h ago";
+                return new Date(t).toISOString().slice(0, 10);
+            }
+            // Append one row (li) to the panel for a priorScoreView. ``isDraft``
+            // renders the unsubmitted stash with its own badge/accent.
+            function appendScoreItem(list, v, isDraft) {
+                const li = document.createElement("li");
+                if (isDraft) li.className = "ps-draft";
+                const header = document.createElement("div");
+                header.className = "ps-header";
+                const valueEl = document.createElement("span");
+                if (typeof v.value !== "number") {
+                    valueEl.textContent = "⚠ missing value";
+                    valueEl.style.color = "#991b1b";
+                } else {
+                    valueEl.textContent = v.value
+                        + (typeof v.minutes === "number" ? " " + v.minutes + "m" : "");
+                }
+                const badge = document.createElement("span");
+                if (isDraft) {
+                    badge.className = "badge badge-draft";
+                    badge.textContent = "draft";
+                    badge.title = "Unsubmitted stash";
+                } else {
+                    badge.className = "badge " + (v.submitted === "hawk" ? "badge-hawk" : "badge-local");
+                    badge.textContent = v.submitted === "hawk" ? "Hawk" : "local";
+                    badge.title = v.submitted === "hawk" ? "Pushed to Hawk" : "Local only";
+                }
+                const when = document.createElement("span");
+                when.className = "ps-when";
+                when.textContent = formatRelative(v.when);
+                header.append(valueEl, badge, when);
+                const exp = document.createElement("span");
+                exp.className = "ps-explanation";
+                exp.title = v.explanation || "";
+                exp.textContent = v.explanation || "";
+                li.append(header, exp);
+                list.append(li);
+                // Only make the explanation clickable when it actually
+                // overflows — otherwise toggling .expanded is a no-op
+                // and the pointer cursor lies about interactivity.
+                if (exp.scrollWidth > exp.clientWidth) {
+                    exp.classList.add("clickable");
+                    exp.addEventListener("click", () => exp.classList.toggle("expanded"));
+                }
+            }
+
+            function renderPriorScores() {
+                const list = document.getElementById("prior-scores-list");
+                const empty = document.getElementById("prior-scores-empty");
+                if (!list) return;
+                const count = historyEntries.length;
+                const hasStash = !!currentStash;
+                const title = document.querySelector(".prior-scores-title");
+                if (title) title.textContent = "Your scores for this sample (" + count + ")";
+                const toggleLabel = document.querySelector(".prior-scores-toggle-label");
+                if (toggleLabel) toggleLabel.textContent = "Your scores (" + count + ")";
+                list.innerHTML = "";
+                // The panel is always visible — empty state is a single line of
+                // placeholder text rather than hiding the whole thing.
+                if (!count && !hasStash) {
+                    if (empty) empty.style.display = "";
+                    return;
+                }
+                if (empty) empty.style.display = "none";
+                // The current unsubmitted draft sits at the top, above the
+                // submitted history.
+                if (hasStash) appendScoreItem(list, priorScoreView(currentStash), true);
+                // Newest first — assume saved_at is monotonically increasing in
+                // file order, but sort defensively in case the server returned
+                // them differently.
+                const ordered = historyEntries.slice().sort((a, b) => {
+                    const av = (a.saved_at || "");
+                    const bv = (b.saved_at || "");
+                    return bv.localeCompare(av);
+                });
+                for (const entry of ordered) appendScoreItem(list, priorScoreView(entry), false);
+            }
+
+            // ---------- Side panel resize + collapse ----------
+            // Width and collapsed state persist across reloads (per origin —
+            // not per sample) so the user's preferred layout stays put.
+            const SIDE_PANEL_WIDTH_KEY = "manual_score.side_panel_width";
+            const SIDE_PANEL_COLLAPSED_KEY = "manual_score.side_panel_collapsed";
+            const SIDE_PANEL_MIN_WIDTH = 240;
+            const SIDE_PANEL_MAX_WIDTH_RATIO = 0.7;  // never wider than 70% of viewport
+
+            function clampPanelWidth(px) {
+                const max = Math.max(SIDE_PANEL_MIN_WIDTH, window.innerWidth * SIDE_PANEL_MAX_WIDTH_RATIO);
+                return Math.min(Math.max(SIDE_PANEL_MIN_WIDTH, px), max);
+            }
+            function applyPanelWidth(px) {
+                document.documentElement.style.setProperty("--side-panel-width", px + "px");
+            }
+            function setPanelCollapsed(collapsed) {
+                document.documentElement.classList.toggle("side-panel-collapsed", !!collapsed);
+                try { localStorage.setItem(SIDE_PANEL_COLLAPSED_KEY, collapsed ? "1" : "0"); } catch (e) {}
+            }
+            (function initSidePanel() {
+                let storedWidth = NaN;
+                let storedCollapsedRaw = null;
+                try {
+                    const w = localStorage.getItem(SIDE_PANEL_WIDTH_KEY);
+                    if (w) storedWidth = parseFloat(w);
+                    storedCollapsedRaw = localStorage.getItem(SIDE_PANEL_COLLAPSED_KEY);
+                } catch (e) {}
+                if (!isNaN(storedWidth)) applyPanelWidth(clampPanelWidth(storedWidth));
+                // Always start collapsed when the sample has nothing to show
+                // (no submitted scores and no stashed draft), since an empty
+                // panel only wastes space. With content, the user's persisted
+                // collapse choice wins (defaulting to expanded).
+                const hasContent = historyEntries.length > 0 || !!currentStash;
+                const collapsed = !hasContent
+                    ? true
+                    : storedCollapsedRaw === "1";
+                if (collapsed) document.documentElement.classList.add("side-panel-collapsed");
+
+                const toggle = document.getElementById("prior-scores-toggle");
+                if (toggle) {
+                    toggle.addEventListener("click", () => {
+                        const nowCollapsed = !document.documentElement.classList.contains("side-panel-collapsed");
+                        setPanelCollapsed(nowCollapsed);
+                    });
+                }
+                const handle = document.getElementById("prior-scores-resize");
+                if (handle) {
+                    let dragging = false;
+                    handle.addEventListener("mousedown", (e) => {
+                        // Auto-expand if the user grabs the resize bar while
+                        // collapsed (they probably meant to open it first).
+                        if (document.documentElement.classList.contains("side-panel-collapsed")) {
+                            setPanelCollapsed(false);
+                        }
+                        dragging = true;
+                        handle.classList.add("dragging");
+                        document.body.style.userSelect = "none";
+                        e.preventDefault();
+                    });
+                    window.addEventListener("mousemove", (e) => {
+                        if (!dragging) return;
+                        const newWidth = clampPanelWidth(window.innerWidth - e.clientX);
+                        applyPanelWidth(newWidth);
+                    });
+                    window.addEventListener("mouseup", () => {
+                        if (!dragging) return;
+                        dragging = false;
+                        handle.classList.remove("dragging");
+                        document.body.style.userSelect = "";
+                        // Read the current width back from the CSS variable
+                        // (which the drag handler already clamped) before
+                        // persisting, so reload restores the exact same value.
+                        const px = parseFloat(
+                            getComputedStyle(document.documentElement).getPropertyValue("--side-panel-width")
+                        );
+                        if (!isNaN(px)) {
+                            try { localStorage.setItem(SIDE_PANEL_WIDTH_KEY, String(Math.round(px))); } catch (e) {}
+                        }
+                    });
+                }
+            })();
+
+            let toastDismissTimer = null;
+            function showToast(kind, msg) {
+                const toast = document.getElementById("toast");
+                if (!toast) return;
+                toast.textContent = msg;
+                toast.className = "toast toast-visible toast-" + kind;
+                if (kind === "error") {
+                    const close = document.createElement("button");
+                    close.className = "toast-close";
+                    close.textContent = "Dismiss";
+                    close.addEventListener("click", () => hideToast());
+                    toast.append(close);
+                }
+                if (toastDismissTimer) clearTimeout(toastDismissTimer);
+                if (kind !== "error") {
+                    toastDismissTimer = setTimeout(hideToast, 4000);
+                }
+            }
+            function hideToast() {
+                const toast = document.getElementById("toast");
+                if (!toast) return;
+                toast.className = "toast";
+                if (toastDismissTimer) {
+                    clearTimeout(toastDismissTimer);
+                    toastDismissTimer = null;
+                }
+            }
+
+            async function reopenSample() {
+                const btn = document.getElementById("reopen-btn");
+                if (!btn || btn.disabled) return;
+                if (!confirm("Reopen this sample for scoring?")) return;
+                btn.disabled = true;
+                try {
+                    const resp = await fetch("/api/reopen", { method: "POST" });
+                    const data = await resp.json();
+                    if (resp.ok && data.success) {
+                        showToast("success", "Sample reopened for scoring");
+                        window.location.reload();
+                    } else {
+                        showToast("error", data.error || "Reopen failed");
+                        btn.disabled = false;
+                    }
+                } catch (err) {
+                    showToast("error", "Reopen failed: " + (err && err.message ? err.message : err));
+                    btn.disabled = false;
+                }
+            }
+
+            async function finishSample() {
+                const btn = document.getElementById("finish-btn");
+                if (!btn || btn.disabled) return;
+                if (!confirm("Mark this sample as done scoring? This sends a finish event to Hawk.")) return;
+                btn.disabled = true;
+                const originalLabel = btn.textContent;
+                btn.textContent = "Sending...";
+                try {
+                    const resp = await fetch("/api/finish", { method: "POST" });
+                    const data = await resp.json();
+                    if (resp.ok && data.success) {
+                        const ref = data.request_uuid ? " (" + data.request_uuid.slice(0, 8) + ")" : "";
+                        showToast("success", "Marked as done scoring" + ref);
+                        btn.textContent = "Done Scoring Sample ✓";
+                        // Reload so the section collapses to the "finished"
+                        // message and the form contents disappear.
+                        window.location.reload();
+                        // Keep disabled — append-only InfoEvent, no value in
+                        // letting the user re-click.
+                    } else {
+                        showToast("error", data.error || "Finish failed");
+                        btn.disabled = false;
+                        btn.textContent = originalLabel;
+                    }
+                } catch (err) {
+                    showToast("error", "Finish failed: " + (err && err.message ? err.message : err));
+                    btn.disabled = false;
+                    btn.textContent = originalLabel;
+                }
+            }
+
+            // Initial paint from the server-rendered historyEntries.
+            renderPriorScores();
+
+            async function submitScore(e) {
+                e.preventDefault();
+                const btn = document.getElementById("submit-btn");
+
+                const scoreInput = fieldEl("value");
+                const explanationInput = fieldEl("explanation");
+                const value = parseFloat(scoreInput && scoreInput.value);
+
+                if (isNaN(value) || !scoreInput || scoreInput.value === "") {
+                    if (scoreInput) scoreInput.focus();
+                    return;
+                }
+                if (!explanationInput || !explanationInput.value.trim()) {
+                    if (explanationInput) explanationInput.focus();
+                    return;
+                }
+
+                const minutesInput = fieldEl("minutes_to_score");
+                const currentMinutes = parseFloat(minutesInput && minutesInput.value);
+                let warning = "";
+                if (
+                    priorMaxMinutes !== null
+                    && !isNaN(currentMinutes)
+                    && currentMinutes <= priorMaxMinutes
+                ) {
+                    warning = `\n\nWarning: You previously submitted with ${priorMaxMinutes} minutes to score.`;
+                }
+                if (!confirm(`Submit score of ${value} with ${currentMinutes} minutes to score?${warning}`)) return;
+
+                btn.disabled = true;
+                btn.textContent = "Submitting...";
+                hideResult();
+
+                try {
+                    const body = collectForm();
+                    const resp = await fetch("/api/submit-score", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(body),
+                    });
+                    const data = await resp.json();
+                    if (data.success) {
+                        if (data.hawkless) {
+                            showResultHtml("success",
+                                "Score saved locally to "
+                                + pathLinkHtml(data.score_path)
+                                + ". Run <code>manual-score-submit</code> to push to Hawk.");
+                            showToast("success", "Saved locally — push later with manual-score-submit");
+                        } else {
+                            showResultText("success",
+                                "Score submitted successfully!");
+                            const ref = data.request_uuid ? " (" + data.request_uuid.slice(0, 8) + ")" : "";
+                            showToast("success", "Score submitted to Hawk" + ref);
+                        }
+                        // The server only drops the stash when the submitted
+                        // entry exactly matches it; sync the banner to that
+                        // decision so a stash that survived the submit stays
+                        // visible.
+                        if (data.stash_dropped) {
+                            currentStash = null;
+                            setStashBannerVisible(false);
+                        }
+                        // First submit on this sample creates history —
+                        // surface the banner so the user understands the
+                        // pre-fill that will appear on revisit. Recompute
+                        // most-invested after appending the new entry so
+                        // a quick edit with low minutes doesn't displace
+                        // the time-rich prior submission in the Reload
+                        // button.
+                        hasLocalHistory = true;
+                        setHistoryBannerVisible(true);
+                        // Live-update the header progress bar: the page
+                        // doesn't reload after submit (form stays editable),
+                        // so the server returns fresh counts and we patch
+                        // the DOM in place.
+                        const doneEl = document.getElementById("queue-done-count");
+                        if (doneEl && typeof data.queue_done === "number") {
+                            doneEl.textContent = data.queue_done;
+                        }
+                        const skippedWrap = document.getElementById("queue-skipped-wrap");
+                        const skippedEl = document.getElementById("queue-skipped-count");
+                        if (skippedWrap && skippedEl && typeof data.queue_skipped === "number") {
+                            skippedEl.textContent = data.queue_skipped;
+                            skippedWrap.style.display = data.queue_skipped > 0 ? "inline" : "none";
+                        }
+                        const fillEl = document.getElementById("queue-bar-fill");
+                        if (fillEl
+                            && typeof data.queue_done === "number"
+                            && typeof data.queue_skipped === "number"
+                            && typeof data.queue_total === "number"
+                            && data.queue_total > 0) {
+                            const pct = (data.queue_done + data.queue_skipped) / data.queue_total * 100;
+                            fillEl.style.width = pct.toFixed(1) + "%";
+                        }
+                        // Track the just-submitted entry in the history
+                        // list so the dedup check disables Submit until the
+                        // user edits a field, and so the prior-scores panel
+                        // can render the new row. ``data.saved_entry`` is the
+                        // server's combined view: ScoreEvent shape + the
+                        // spread flat form fields, so both formsEqual() and
+                        // renderPriorScores() see what they need.
+                        const newEntry = data.saved_entry || body;
+                        historyEntries.push(newEntry);
+                        mostInvestedHistory = pickMostInvested(historyEntries);
+                        renderPriorScores();
+                        applyClearOnSubmit();
+                        // savedSnapshot is captured *after* clearing so the
+                        // cleared state becomes the auto-stash baseline (the
+                        // dirty check fires only on subsequent edits, not on
+                        // the programmatic clear itself).
+                        captureSavedSnapshot();
+                        wireSubmitListeners();
+                        btn.textContent = "Submit Score";
+                        if (typeof data.prior_max_minutes === "number" || data.prior_max_minutes === null) {
+                            priorMaxMinutes = data.prior_max_minutes;
+                        }
+                        syncSubmitButton();
+                        syncStashButton();
+                        // Skip and Done Scoring share the right-side slot:
+                        // before any submit Skip is there; once a score
+                        // exists the right slot belongs to Done Scoring.
+                        const finishBtn = document.getElementById("finish-btn");
+                        if (finishBtn) {
+                            finishBtn.style.display = "";
+                        }
+                        const skipBtn = document.getElementById("skip-btn");
+                        if (skipBtn) {
+                            skipBtn.style.display = "none";
+                        }
+                        // queue-nav only renders for multi-sample sets, so it's
+                        // absent (and this block is skipped) on a single sample.
+                        const queueNav = document.getElementById("queue-nav");
+                        if (queueNav) {
+                            queueNav.style.display = "block";
+                            if (!data.has_next) {
+                                const nextBtn = document.getElementById("next-btn");
+                                nextBtn.textContent = "View Summary";
+                                nextBtn.onclick = () => {
+                                    window.location.href = "/summary";
+                                };
+                            }
+                        }
+                    } else {
+                        const msg = data.error || "Unknown error";
+                        showResultText("error", "Error: " + msg);
+                        showToast("error", "Submit failed: " + msg);
+                        btn.disabled = false;
+                        btn.textContent = "Submit Score";
+                    }
+                } catch (err) {
+                    showResultText("error", "Error: " + err.message);
+                    showToast("error", "Submit failed: " + err.message);
+                    btn.disabled = false;
+                    btn.textContent = "Submit Score";
+                }
+            }
+
+            function handleAdvanceResponse(data, onError) {
+                if (data.success || data.reload) {
+                    window.location.href = "/";
+                } else if (data.done) {
+                    window.location.href = "/summary";
+                } else {
+                    alert("Error: " + (data.error || "Unknown"));
+                    onError();
+                }
+            }
+
+            async function nextSample() {
+                const btn = document.getElementById("next-btn");
+                btn.disabled = true;
+                btn.textContent = "Loading next...";
+                const restore = () => {
+                    btn.disabled = false;
+                    btn.innerHTML = "Next Sample &rarr;";
+                };
+                await autoStashIfDirty();
+                try {
+                    const resp = await fetch("/api/next", { method: "POST" });
+                    handleAdvanceResponse(await resp.json(), restore);
+                } catch (err) {
+                    alert("Error: " + err.message);
+                    restore();
+                }
+            }
+
+            async function skipSample() {
+                const btn = document.getElementById("skip-btn");
+                btn.disabled = true;
+                btn.textContent = "Skipping...";
+                const restore = () => {
+                    btn.disabled = false;
+                    btn.textContent = "Skip";
+                };
+                try {
+                    const resp = await fetch("/api/skip", { method: "POST" });
+                    handleAdvanceResponse(await resp.json(), restore);
+                } catch (err) {
+                    alert("Error: " + err.message);
+                    restore();
+                }
+            }
+
+            (function() {
+                var input = document.getElementById("nav-index");
+                if (!input) return;
+                async function doNavigate(index) {
+                    input.disabled = true;
+                    await autoStashIfDirty();
+                    try {
+                        const resp = await fetch("/api/navigate", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ index }),
+                        });
+                        const data = await resp.json();
+                        if (data.success) {
+                            window.location.href = "/";
+                        } else {
+                            alert("Error: " + (data.error || "Unknown"));
+                            input.disabled = false;
+                        }
+                    } catch (err) {
+                        alert("Error: " + err.message);
+                        input.disabled = false;
+                    }
+                }
+                input.addEventListener("change", function() {
+                    var val = parseInt(this.value, 10);
+                    if (isNaN(val) || val < 1 || val > {{ queue_total }}) {
+                        this.value = {{ current_idx + 1 }};
+                        return;
+                    }
+                    doNavigate(val - 1);
+                });
+                input.addEventListener("keydown", function(e) {
+                    if (e.key === "Enter") { e.preventDefault(); this.blur(); this.dispatchEvent(new Event("change")); }
+                });
+            })();
+
+            async function exitTool() {
+                if (!confirm("Stop containers and exit?")) return;
+                const btn = document.getElementById("exit-btn");
+                btn.disabled = true;
+                btn.textContent = "Exiting...";
+                // Flush the timer before /api/exit so the current elapsed lands
+                // on disk: the server keeps /api/timer-state open during
+                // shutdown, but the write must finish before the process dies.
+                try {
+                    await saveTimerStateNow();
+                    await fetch("/api/exit", { method: "POST" });
+                } catch {}
+                document.body.innerHTML = '<p style="padding: 40px; text-align: center; color: #666">Scoring tool stopped. You can close this tab.</p>';
+            }
+
+            async function openArtifacts() {
+                try {
+                    const resp = await fetch("/api/open-artifacts", { method: "POST" });
+                    const data = await resp.json();
+                    if (!data.success) alert("Error: " + (data.error || "Unknown"));
+                } catch (err) {
+                    alert("Error: " + err.message);
+                }
+            }
+
+            async function openConfig() {
+                try {
+                    const resp = await fetch("/api/open-config", { method: "POST" });
+                    const data = await resp.json();
+                    if (!data.success) alert("Error: " + (data.error || "Unknown"));
+                } catch (err) {
+                    alert("Error: " + err.message);
+                }
+            }
+
+            // Render an absolute path as a clickable link that opens via
+            // /api/open-path (server-side OS launch). Browsers block file://
+            // links from http:// pages, so we route the click through the
+            // backend. Returns an HTML string suitable for innerHTML.
+            function escapeHtml(s) {
+                return String(s).replace(/[&<>"']/g, c => ({
+                    "&": "&amp;", "<": "&lt;", ">": "&gt;",
+                    '"': "&quot;", "'": "&#39;",
+                }[c]));
+            }
+            function pathLinkHtml(path) {
+                const esc = escapeHtml(path);
+                return `<a href="#" class="path-link" data-path="${esc}" title="Open in OS default app">${esc}</a>`;
+            }
+            // Event delegation for every .path-link rendered anywhere on
+            // the page (status messages, banners, etc.). Wired once.
+            document.body.addEventListener("click", async ev => {
+                const link = ev.target.closest(".path-link");
+                if (!link) return;
+                ev.preventDefault();
+                try {
+                    const resp = await fetch("/api/open-path", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ path: link.dataset.path }),
+                    });
+                    if (!resp.ok) {
+                        const data = await resp.json().catch(() => ({}));
+                        alert("Couldn't open: " + (data.error || resp.statusText));
+                    }
+                } catch (err) {
+                    alert("Couldn't open: " + err.message);
+                }
+            });
+
+            // In-page ToC links inside an instruction panel. The default browser
+            // jump scrolls every scrollable ancestor (the page included); we want
+            // only the panel's own scroll container to move so the rest of the UI
+            // stays put.
+            document.body.addEventListener("click", ev => {
+                const link = ev.target.closest('a[href^="#"]');
+                if (!link) return;
+                const container = link.closest(".content");
+                if (!container) return;
+                const id = decodeURIComponent(link.getAttribute("href").slice(1));
+                if (!id) return;
+                const target = Array.from(container.querySelectorAll("[id]")).find(el => el.id === id);
+                if (!target) return;
+                ev.preventDefault();
+                container.scrollTop +=
+                    target.getBoundingClientRect().top - container.getBoundingClientRect().top;
+            });
+
+            // Banners stack independently — stash and history can both be
+            // visible at once. The history banner is server-rendered based
+            // on the snapshot at page load; we flip it on the client too
+            // once the user's first successful submit creates history.
+            let hasLocalHistory = {{ has_local_history | tojson }};
+
+            function setStashBannerVisible(visible) {
+                const el = document.getElementById("stash-info-banner");
+                if (el) el.style.display = visible ? "" : "none";
+            }
+
+            function setHistoryBannerVisible(visible) {
+                const el = document.getElementById("local-history-info");
+                if (el) el.style.display = visible ? "" : "none";
+            }
+
+            // Clear every tracked input. Synthetic input events re-fire the
+            // button-sync listeners that watch the fields, so dependent UI
+            // stays in sync.
+            function clearAllFields() {
+                TRACKED_INPUT_FIELDS.forEach(f => {
+                    const el = fieldEl(f);
+                    if (!el || el.value === "") return;
+                    el.value = "";
+                    el.dispatchEvent(new Event("input", { bubbles: true }));
+                });
+            }
+
+            async function stashScore() {
+                const btn = document.getElementById("stash-btn");
+                btn.disabled = true;
+                btn.textContent = "Stashing...";
+                const restore = () => {
+                    btn.textContent = "Stash";
+                    syncStashButton();
+                };
+                try {
+                    const body = collectForm();
+                    const resp = await fetch("/api/stash", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(body),
+                    });
+                    const data = await resp.json();
+                    if (data.success) {
+                        showResultHtml("success",
+                            "Score stashed to " + pathLinkHtml(data.score_path) + ".");
+                        // Snapshot what we just sent BEFORE clearing the
+                        // fields, so Restore can pull it back in. Mirrors
+                        // the server's flat draft shape.
+                        currentStash = body;
+                        renderPriorScores();
+                        // The stash is on disk now — wipe the inputs so the
+                        // user gets a fresh form. Reopening this sample
+                        // reloads the stash via the server-side pre-fill.
+                        clearAllFields();
+                        captureSavedSnapshot();
+                        setStashBannerVisible(true);
+                    } else {
+                        showResultText("error", "Error: " + (data.error || "Unknown"));
+                    }
+                    restore();
+                } catch (err) {
+                    alert("Error: " + err.message);
+                    restore();
+                }
+            }
+
+            async function dropStash() {
+                const btn = document.getElementById("drop-stash-btn");
+                btn.disabled = true;
+                btn.textContent = "Dropping...";
+                try {
+                    const resp = await fetch("/api/stash", { method: "DELETE" });
+                    const data = await resp.json();
+                    if (data.success) {
+                        setStashBannerVisible(false);
+                        currentStash = null;
+                        renderPriorScores();
+                        // Current values become the new baseline — re-stashing
+                        // immediately on the next nav would just undo the drop.
+                        captureSavedSnapshot();
+                        btn.disabled = false;
+                        btn.textContent = "Drop";
+                    } else {
+                        alert("Error: " + (data.error || "Unknown"));
+                        btn.disabled = false;
+                        btn.textContent = "Drop";
+                    }
+                } catch (err) {
+                    alert("Error: " + err.message);
+                    btn.disabled = false;
+                    btn.textContent = "Drop";
+                }
+            }
+
+            // Write ``source`` (a flat form payload, same shape as the
+            // /api/stash and /api/submit-score POST bodies) into the form.
+            // Fires synthetic input events so wired button-sync listeners
+            // update. Fields absent from the source are cleared, so the form
+            // ends up as an exact mirror of ``source``.
+            function fillFormFromSource(source) {
+                if (!source) return;
+                TRACKED_INPUT_FIELDS.forEach(f => {
+                    const el = fieldEl(f);
+                    if (!el) return;
+                    const value = source[f] !== undefined ? String(source[f]) : "";
+                    if (el.value === value) return;
+                    el.value = value;
+                    el.dispatchEvent(new Event("input", { bubbles: true }));
+                });
+            }
+
+            // Stash banner: pull the on-disk draft back into the form.
+            function restoreStash() {
+                fillFormFromSource(currentStash);
+            }
+
+            // History banner: pull the submission with the highest
+            // ``minutes_spent_scoring`` back into the form. Useful after
+            // a tweak you want to roll back to the entry you spent the
+            // most time on.
+            function reloadHistory() {
+                fillFormFromSource(mostInvestedHistory);
+            }
+
+            // Mirror of tracking.most_invested_entry_for_scorer for the
+            // post-submit refresh: a brand-new entry might or might not
+            // have the highest minutes among the history, so we recompute
+            // instead of unconditionally promoting the latest submission.
+            function pickMostInvested(entries) {
+                let best = null;
+                let bestKey = null;
+                for (const e of entries) {
+                    const meta = (e && e.score && e.score.metadata) || {};
+                    const m = typeof meta.minutes_spent_scoring === "number"
+                        ? meta.minutes_spent_scoring
+                        : 0;
+                    const savedAt = (e && e.saved_at) || "";
+                    if (
+                        bestKey === null
+                        || m > bestKey[0]
+                        || (m === bestKey[0] && savedAt > bestKey[1])
+                    ) {
+                        best = e;
+                        bestKey = [m, savedAt];
+                    }
+                }
+                return best;
+            }
+
+            async function pushSampleToHawk() {
+                const btn = document.getElementById("push-sample-btn");
+                const msg = document.getElementById("push-sample-msg");
+                btn.disabled = true;
+                btn.textContent = "Pushing...";
+                msg.style.display = "none";
+                msg.textContent = "";
+                try {
+                    const resp = await fetch("/api/push-sample-to-hawk", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ uuid: {{ uuid | tojson }} }),
+                    });
+                    const data = await resp.json();
+                    if (resp.status === 503) {
+                        msg.style.display = "block";
+                        msg.textContent = data.error || "Push disabled.";
+                        btn.disabled = false;
+                        btn.textContent = "Push this sample to Hawk";
+                        return;
+                    }
+                    if (data.success) {
+                        window.location.reload();
+                        return;
+                    }
+                    msg.style.display = "block";
+                    msg.textContent =
+                        "Push failed: " +
+                        (data.failures || []).map(f => f.error).join("; ");
+                    btn.disabled = false;
+                    btn.textContent = "Push this sample to Hawk";
+                } catch (err) {
+                    msg.style.display = "block";
+                    msg.textContent = "Error: " + err.message;
+                    btn.disabled = false;
+                    btn.textContent = "Push this sample to Hawk";
+                }
+            }
+
+            async function toggleAttach() {
+                try {
+                    await fetch("/api/toggle-attach", { method: "POST" });
+                } catch {}
+            }
+
+            async function openInVscode() {
+                var btn = document.getElementById("open-vscode-btn");
+                btn.disabled = true;
+                btn.textContent = "Opening...";
+                try {
+                    var resp = await fetch("/api/open-vscode", { method: "POST" });
+                    var data = await resp.json();
+                    if (data.success) {
+                        ensureTimersRunning();
+                    } else {
+                        alert("Error: " + (data.error || "Unknown"));
+                    }
+                } catch (err) {
+                    alert("Error: " + err.message);
+                }
+                btn.disabled = false;
+                btn.textContent = "Open in VS Code";
+            }
+
+            async function toggleAutostart() {
+                try {
+                    await fetch("/api/toggle-autostart", { method: "POST" });
+                } catch {}
+            }
+
+            async function startContainer() {
+                const btn = document.getElementById("start-container-btn");
+                btn.disabled = true;
+                btn.textContent = "Starting...";
+                try {
+                    const resp = await fetch("/api/start-container", { method: "POST" });
+                    const data = await resp.json();
+                    if (data.success) {
+                        document.getElementById("container-idle").style.display = "none";
+                        document.getElementById("setup-progress").style.display = "block";
+                        if (data.container_name) {
+                            document.getElementById("container-exec-cmd").textContent =
+                                "docker exec -it " + data.container_name + " bash";
+                            document.getElementById("container-name-label").textContent = data.container_name;
+                        }
+                        pollSetupStatus();
+                    } else {
+                        alert("Error: " + (data.error || "Unknown"));
+                        btn.disabled = false;
+                        btn.textContent = "Start Container";
+                    }
+                } catch (err) {
+                    alert("Error: " + err.message);
+                    btn.disabled = false;
+                    btn.textContent = "Start Container";
+                }
+            }
+
+            async function retrySetup() {
+                const btn = document.getElementById("retry-btn");
+                btn.disabled = true;
+                btn.textContent = "Retrying...";
+                try {
+                    const resp = await fetch("/api/retry-setup", { method: "POST" });
+                    const data = await resp.json();
+                    if (data.success) {
+                        document.getElementById("setup-error").style.display = "none";
+                        document.getElementById("setup-progress").style.display = "block";
+                        pollSetupStatus();
+                    } else {
+                        alert("Retry failed: " + (data.error || "Unknown"));
+                        btn.disabled = false;
+                        btn.textContent = "Retry";
+                    }
+                } catch (err) {
+                    alert("Error: " + err.message);
+                    btn.disabled = false;
+                    btn.textContent = "Retry";
+                }
+            }
+
+            async function setupDisplay() {
+                const btn = document.getElementById("novnc-btn");
+                const status = document.getElementById("novnc-status");
+                const link = document.getElementById("novnc-link");
+                btn.disabled = true;
+                btn.textContent = "Installing...";
+                status.style.display = "inline";
+                status.textContent = "This may take a minute...";
+                try {
+                    const resp = await fetch("/api/setup-display", { method: "POST" });
+                    const data = await resp.json();
+                    status.style.display = "none";
+                    if (data.success) {
+                        btn.style.display = "none";
+                        link.style.display = "inline";
+                        link.innerHTML =
+                            `<a href="${data.url}" target="_blank" style="color: #7c3aed;">${data.url}</a> ` +
+                            '<span style="color: #666;">| Run with: DISPLAY=:99 SDL_VIDEODRIVER=x11 python main.py</span>';
+                    } else {
+                        btn.disabled = false;
+                        btn.textContent = "Install noVNC Display";
+                        alert("noVNC setup failed: " + (data.error || "Unknown error"));
+                    }
+                } catch (err) {
+                    status.style.display = "none";
+                    btn.disabled = false;
+                    btn.textContent = "Install noVNC Display";
+                    alert("Error: " + err.message);
+                }
+            }
+
+            async function cleanup() {
+                if (!confirm("Stop and remove the container?")) return;
+                try {
+                    const resp = await fetch("/api/cleanup", { method: "POST" });
+                    const data = await resp.json();
+                    if (data.success) {
+                        pollSetupStatus();
+                    } else {
+                        alert("Error: " + (data.error || "Unknown error"));
+                    }
+                } catch (err) {
+                    alert("Error: " + err.message);
+                }
+            }
+        </script>
+        <script>
+            const LAYOUT_KEY = "manualScoringLayoutV1";
+            const layoutState = { twoCol: false, contentHeights: {}, pairHeights: {}, colSplits: {} };
+            try {
+                Object.assign(layoutState, JSON.parse(localStorage.getItem(LAYOUT_KEY) || "{}"));
+            } catch {}
+
+            function saveLayout() {
+                localStorage.setItem(LAYOUT_KEY, JSON.stringify(layoutState));
+            }
+
+            function pairPanelNames(pairIdx) {
+                return Array.from(document.querySelectorAll(`.panel-pair[data-pair="${pairIdx}"] [data-panel]`)).map(
+                    (el) => el.dataset.panel,
+                );
+            }
+
+            // A "fill" panel (data-fill, e.g. the scratch pad) holds a textarea
+            // that fills its .content, so the saved height drives `height`, not
+            // `max-height` like the markdown instruction panels.
+            function panelIsFill(name) {
+                const el = document.querySelector(`[data-panel="${name}"]`);
+                return el !== null && el.dataset.fill !== undefined;
+            }
+
+            function applyLayout() {
+                document.body.classList.toggle("two-col", layoutState.twoCol);
+                document.querySelectorAll(".panel-pair").forEach((pair) => {
+                    const panelNames = pairPanelNames(pair.dataset.pair);
+                    if (layoutState.twoCol) {
+                        // Two-col: the pair owns one height shared by both
+                        // panels' .content via --content-h (set by the single
+                        // bar below the pair). Clear any per-panel inline dims
+                        // so the variable governs.
+                        let ph = layoutState.pairHeights[pair.dataset.pair];
+                        if (ph === undefined) {
+                            // Migrate from per-panel heights saved before
+                            // pair-level resize existed.
+                            const heights = panelNames
+                                .map((n) => layoutState.contentHeights[n])
+                                .filter((h) => h !== undefined);
+                            if (heights.length > 0) ph = Math.max(...heights);
+                        }
+                        if (ph) pair.style.setProperty("--content-h", ph + "px");
+                        else pair.style.removeProperty("--content-h");
+                        panelNames.forEach((n) => {
+                            const content = document.querySelector(`[data-panel="${n}"] .content`);
+                            if (content) {
+                                content.style.maxHeight = "";
+                                content.style.height = "";
+                            }
+                        });
+                    } else {
+                        // One-col: each panel keeps its own height (its own
+                        // resize bar), so clear the shared variable and apply
+                        // per-panel inline dims.
+                        pair.style.removeProperty("--content-h");
+                        panelNames.forEach((n) => {
+                            const content = document.querySelector(`[data-panel="${n}"] .content`);
+                            if (!content) return;
+                            const h = layoutState.contentHeights[n];
+                            if (panelIsFill(n)) {
+                                content.style.maxHeight = "";
+                                content.style.height = h ? h + "px" : "";
+                            } else {
+                                content.style.height = "";
+                                content.style.maxHeight = h ? h + "px" : "";
+                            }
+                        });
+                    }
+                    const split = layoutState.colSplits[pair.dataset.pair];
+                    const cells = pair.querySelectorAll(".panel-cell");
+                    if (split !== undefined && cells.length === 2) {
+                        cells[0].style.flex = `${split} 1 0`;
+                        cells[1].style.flex = `${1 - split} 1 0`;
+                    }
+                });
+            }
+
+            function syncPairOpenStates() {
+                document.querySelectorAll(".panel-pair").forEach((pair) => {
+                    const detailsList = pair.querySelectorAll("details");
+                    if (detailsList.length !== 2) return;
+                    const anyOpen = Array.from(detailsList).some((d) => d.open);
+                    detailsList.forEach((d) => {
+                        d.open = anyOpen;
+                    });
+                });
+            }
+
+            const toggle = document.getElementById("two-col-toggle");
+            toggle.checked = layoutState.twoCol;
+            toggle.addEventListener("change", () => {
+                layoutState.twoCol = toggle.checked;
+                saveLayout();
+                applyLayout();
+                if (layoutState.twoCol) syncPairOpenStates();
+            });
+
+            document.querySelectorAll(".panel-pair").forEach((pair) => {
+                const detailsList = pair.querySelectorAll("details");
+                if (detailsList.length !== 2) return;
+                detailsList.forEach((d) => {
+                    d.addEventListener("toggle", () => {
+                        if (!layoutState.twoCol) return;
+                        detailsList.forEach((other) => {
+                            if (other !== d && other.open !== d.open) other.open = d.open;
+                        });
+                    });
+                });
+            });
+
+            if (layoutState.twoCol) syncPairOpenStates();
+
+            document.querySelectorAll(".row-resizer").forEach((resizer) => {
+                resizer.addEventListener("mousedown", (e) => {
+                    e.preventDefault();
+                    // A per-panel bar (has data-panel, one-col) resizes just its
+                    // own panel; a per-pair bar (no data-panel, two-col) resizes
+                    // both panels via the shared --content-h. Each is only
+                    // visible in its layout, so the marker alone decides.
+                    const panelName = resizer.dataset.panel;
+                    const refContent = panelName
+                        ? document.querySelector(`[data-panel="${panelName}"] .content`)
+                        : null;
+                    const pair = panelName
+                        ? null
+                        : document.querySelector(`.panel-pair[data-pair="${resizer.dataset.pair}"]`);
+                    // Honor each panel's CSS min-height so the drag stops at the
+                    // floor instead of storing smaller (which would render
+                    // clamped and lag on the way back up).
+                    const cssMin = (el) => parseFloat(getComputedStyle(el).minHeight) || 50;
+                    let startHeight, minH;
+                    if (panelName) {
+                        if (!refContent) return;
+                        startHeight = refContent.offsetHeight;
+                        minH = cssMin(refContent);
+                    } else {
+                        if (!pair) return;
+                        const contents = Array.from(pair.querySelectorAll("[data-panel] .content"));
+                        if (!contents.length) return;
+                        startHeight = Math.max(...contents.map((c) => c.offsetHeight));
+                        minH = Math.max(50, ...contents.map(cssMin));
+                    }
+                    const startY = e.clientY;
+                    resizer.classList.add("dragging");
+                    document.body.style.cursor = "ns-resize";
+                    document.body.style.userSelect = "none";
+
+                    function onMove(ev) {
+                        const h = Math.max(minH, startHeight + (ev.clientY - startY));
+                        if (panelName) {
+                            refContent.style[panelIsFill(panelName) ? "height" : "maxHeight"] = h + "px";
+                            layoutState.contentHeights[panelName] = h;
+                        } else {
+                            pair.style.setProperty("--content-h", h + "px");
+                            layoutState.pairHeights[resizer.dataset.pair] = h;
+                        }
+                    }
+                    function onUp() {
+                        document.removeEventListener("mousemove", onMove);
+                        document.removeEventListener("mouseup", onUp);
+                        document.body.style.cursor = "";
+                        document.body.style.userSelect = "";
+                        resizer.classList.remove("dragging");
+                        saveLayout();
+                    }
+                    document.addEventListener("mousemove", onMove);
+                    document.addEventListener("mouseup", onUp);
+                });
+            });
+
+            document.querySelectorAll(".col-resizer").forEach((resizer) => {
+                resizer.addEventListener("mousedown", (e) => {
+                    if (!layoutState.twoCol) return;
+                    e.preventDefault();
+                    const pair = resizer.closest(".panel-pair");
+                    const cells = pair.querySelectorAll(".panel-cell");
+                    if (cells.length !== 2) return;
+                    const pairRect = pair.getBoundingClientRect();
+                    const resizerWidth = resizer.offsetWidth;
+                    resizer.classList.add("dragging");
+                    document.body.style.cursor = "ew-resize";
+                    document.body.style.userSelect = "none";
+
+                    function onMove(ev) {
+                        const avail = pairRect.width - resizerWidth;
+                        const leftW = Math.max(50, Math.min(avail - 50, ev.clientX - pairRect.left));
+                        const ratio = leftW / avail;
+                        cells[0].style.flex = `${ratio} 1 0`;
+                        cells[1].style.flex = `${1 - ratio} 1 0`;
+                        layoutState.colSplits[resizer.dataset.pair] = ratio;
+                    }
+                    function onUp() {
+                        document.removeEventListener("mousemove", onMove);
+                        document.removeEventListener("mouseup", onUp);
+                        document.body.style.cursor = "";
+                        document.body.style.userSelect = "";
+                        resizer.classList.remove("dragging");
+                        saveLayout();
+                    }
+                    document.addEventListener("mousemove", onMove);
+                    document.addEventListener("mouseup", onUp);
+                });
+            });
+
+            applyLayout();
+        </script>
+        <script>
+            // Scratch pad: per-sample free-form notes, no history. Open/closed
+            // is a global preference (persists across samples in this session)
+            // via the <details> element's `open` attribute; content is fetched
+            // at page render time and saved back into
+            // `<artifacts>/<uuid>/_score.json["scratchpad"]` on input
+            // (debounced) and on blur.
+            const SCRATCHPAD_OPEN_KEY = "manualScoringScratchpadVisibleV1";
+            const scratchpadSection = document.getElementById("scratchpad-section");
+            const scratchpadTextarea = document.getElementById("scratchpad-textarea");
+            const scratchpadStatus = document.getElementById("scratchpad-status");
+
+            scratchpadSection.open = localStorage.getItem(SCRATCHPAD_OPEN_KEY) === "1";
+
+            scratchpadSection.addEventListener("toggle", () => {
+                localStorage.setItem(SCRATCHPAD_OPEN_KEY, scratchpadSection.open ? "1" : "0");
+                if (scratchpadSection.open) scratchpadTextarea.focus();
+            });
+
+            let scratchpadSaveTimer = null;
+            let scratchpadLastSaved = scratchpadTextarea.value;
+
+            async function saveScratchpadNow() {
+                if (scratchpadSaveTimer !== null) {
+                    clearTimeout(scratchpadSaveTimer);
+                    scratchpadSaveTimer = null;
+                }
+                const content = scratchpadTextarea.value;
+                if (content === scratchpadLastSaved) return;
+                scratchpadStatus.textContent = "Saving...";
+                try {
+                    const resp = await fetch("/api/scratchpad", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ content }),
+                    });
+                    const data = await resp.json();
+                    if (data.success) {
+                        scratchpadLastSaved = content;
+                        scratchpadStatus.textContent = "";
+                    } else {
+                        scratchpadStatus.textContent = "Save failed: " + (data.error || "unknown");
+                    }
+                } catch (err) {
+                    scratchpadStatus.textContent = "Save failed: " + err.message;
+                }
+            }
+
+            scratchpadTextarea.addEventListener("input", () => {
+                scratchpadStatus.textContent = "";
+                if (scratchpadSaveTimer !== null) clearTimeout(scratchpadSaveTimer);
+                scratchpadSaveTimer = setTimeout(saveScratchpadNow, 800);
+                updateScratchpadScopeButtons();
+            });
+            scratchpadTextarea.addEventListener("blur", saveScratchpadNow);
+
+            // "Save to task" / "Save to variant": promote the current notes to
+            // a reusable scope stored outside _score.json. A button is disabled
+            // when the sample lacks that scope or the notes already match what's
+            // stored, so the disabled state doubles as save confirmation.
+            const scratchpadSaveTaskBtn = document.getElementById("scratchpad-save-task");
+            const scratchpadSaveVariantBtn = document.getElementById("scratchpad-save-variant");
+
+            function updateScratchpadScopeButtons() {
+                const content = scratchpadTextarea.value;
+                const taskSame = content === scratchpadTaskStored;
+                const variantSame = content === scratchpadVariantStored;
+                scratchpadSaveTaskBtn.disabled = !SCRATCHPAD_TASK_NAME || taskSame;
+                scratchpadSaveVariantBtn.disabled = !SCRATCHPAD_VARIANT || variantSame;
+                scratchpadSaveTaskBtn.title = !SCRATCHPAD_TASK_NAME
+                    ? "This sample has no task name"
+                    : taskSame
+                      ? "Notes already saved for this task"
+                      : `Save these notes as the default for task "${SCRATCHPAD_TASK_NAME}"`;
+                scratchpadSaveVariantBtn.title = !SCRATCHPAD_VARIANT
+                    ? "This sample has no task variant"
+                    : variantSame
+                      ? "Notes already saved for this variant"
+                      : `Save these notes for variant "${SCRATCHPAD_VARIANT}" only`;
+            }
+
+            async function saveScratchpadScope(scope) {
+                const content = scratchpadTextarea.value;
+                const url = scope === "task" ? "/api/scratchpad/task" : "/api/scratchpad/variant";
+                scratchpadStatus.textContent = "Saving...";
+                try {
+                    const resp = await fetch(url, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ content }),
+                    });
+                    const data = await resp.json();
+                    if (data.success) {
+                        if (scope === "task") scratchpadTaskStored = content;
+                        else scratchpadVariantStored = content;
+                        updateScratchpadScopeButtons();
+                        scratchpadStatus.textContent = scope === "task" ? "Saved to task." : "Saved to variant.";
+                    } else {
+                        scratchpadStatus.textContent = "Save failed: " + (data.error || "unknown");
+                    }
+                } catch (err) {
+                    scratchpadStatus.textContent = "Save failed: " + err.message;
+                }
+            }
+
+            // stopPropagation/preventDefault so a click on the button doesn't
+            // also toggle the <details> it lives inside.
+            scratchpadSaveTaskBtn.addEventListener("click", (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                saveScratchpadScope("task");
+            });
+            scratchpadSaveVariantBtn.addEventListener("click", (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                saveScratchpadScope("variant");
+            });
+
+            updateScratchpadScopeButtons();
+        </script>
+        <script>
+            // Wire every [data-dismissible-banner] element: show it unless the
+            // session-storage key marks it dismissed, and dismiss it on
+            // .btn-close click. Banners opt in with two data attributes; no
+            // per-banner JS needed.
+            (function () {
+                for (const el of document.querySelectorAll("[data-dismissible-banner]")) {
+                    const key = el.dataset.storageKey;
+                    if (!key) continue;
+                    if (sessionStorage.getItem(key) !== "1") {
+                        el.style.display = "flex";
+                    }
+                    const closeBtn = el.querySelector(".btn-close");
+                    if (closeBtn) {
+                        closeBtn.addEventListener("click", () => {
+                            sessionStorage.setItem(key, "1");
+                            el.style.display = "none";
+                        });
+                    }
+                }
+            })();
+        </script>
+    </body>
+</html>

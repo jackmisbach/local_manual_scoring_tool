@@ -1,0 +1,53 @@
+/* Default <dialog> framework. Any <dialog> element on the page picks
+   these up automatically — no per-popup CSS needed. Buttons inside a
+   `.actions` row default to rounded outline; mark the primary action
+   with class="primary" for the blue confirm style. */
+dialog {
+    max-width: 440px;
+    padding: 20px 24px;
+    border: 1px solid #999;
+    border-radius: 8px;
+    margin: auto;
+    color: #1f2937;
+    background: white;
+    font-family: inherit;
+}
+dialog::backdrop {
+    background: rgba(0, 0, 0, 0.4);
+}
+dialog p {
+    margin: 0 0 16px 0;
+    line-height: 1.5;
+}
+dialog .actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin: 0;
+}
+dialog .actions button {
+    padding: 8px 16px;
+    border-radius: 6px;
+    border: 1px solid #d1d5db;
+    background: white;
+    color: #1f2937;
+    cursor: pointer;
+    font-size: 0.9em;
+    font-family: inherit;
+    transition: filter 0.12s, opacity 0.12s, background 0.12s;
+}
+dialog .actions button.primary {
+    background: var(--btn-primary, #2563eb);
+    border-color: var(--btn-primary, #2563eb);
+    color: white;
+}
+dialog .actions button.primary:not(:disabled):hover {
+    filter: brightness(0.92);
+}
+dialog .actions button:not(.primary):not(:disabled):hover {
+    background: #f3f4f6;
+}
+dialog .actions button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
