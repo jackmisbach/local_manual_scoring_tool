@@ -308,16 +308,13 @@ def open_url_in_browser(url: str) -> None:
 # `config` subcommand
 # ---------------------------------------------------------------------------
 
-# Flat keys settable via `config set KEY VALUE`. The task-specific guidance map
-# is set per-task via the nested form `task_specific_guidance_url.<task> <url>`.
-CONFIG_KEYS: tuple[str, ...] = (
-    "samples_dir",
-    "images_dir",
-    "scorer_email",
-    "browser_command",
-    CLEAR_ON_SUBMIT_KEY,
-    "pause_timer_hotkey",
-    "general_guidance_url",
+# Flat scalar keys settable via `config set KEY VALUE`, derived from
+# `_DISCOVERABLE_DEFAULTS` (dict insertion order) minus the nested keys that are
+# not set via the flat form: the task-specific guidance map is set per-task via
+# `task_specific_guidance_url.<task> <url>`, and `task_selection` is UI-managed.
+_NESTED_CONFIG_KEYS = frozenset({TASK_GUIDANCE_KEY, "task_selection"})
+CONFIG_KEYS: tuple[str, ...] = tuple(
+    key for key in _DISCOVERABLE_DEFAULTS if key not in _NESTED_CONFIG_KEYS
 )
 
 

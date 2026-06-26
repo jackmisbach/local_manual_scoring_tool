@@ -63,7 +63,6 @@ from scoring.store import (
     load_tracking,
     queue_summary_fields,
     save_tracking,
-    set_status,
 )
 from scoring.task_selection import load_selection
 
@@ -200,11 +199,7 @@ def populate_tracking_from_queue(
     touched: set[str] | None = None,
 ) -> int:
     """Ensure every scorable queue id has a tracking row. Returns rows added."""
-    by_id = {
-        e["uuid"]: ""
-        for e in queue
-        if e["status"] not in ("running", "ignored") and e["uuid"] not in tracking
-    }
+    by_id = {e["uuid"]: "" for e in queue if e["uuid"] not in tracking}
     return ensure_tracking_entries(tracking, by_id, touched=touched)
 
 
@@ -320,7 +315,6 @@ def advance_to_next(state: ScoringState, lock: threading.Lock) -> AdvanceResult:
         state["no_container"] = state["cli_no_container"]
         next_idx = next_pending_index(state["queue"], state["current_idx"])
         if next_idx is None:
-            state.pop("pending_broken", None)
             return "exhausted"
         next_uuid = state["queue"][next_idx]["uuid"]
         samples_dir = state["samples_dir"]
@@ -328,7 +322,6 @@ def advance_to_next(state: ScoringState, lock: threading.Lock) -> AdvanceResult:
     info = local_sample_info(next_uuid, samples_dir)
 
     with lock:
-        state.pop("pending_broken", None)
         state["current_idx"] = next_idx
         state["uuid"] = next_uuid
         state["info"] = info
@@ -337,20 +330,6 @@ def advance_to_next(state: ScoringState, lock: threading.Lock) -> AdvanceResult:
 
     threading.Thread(target=_setup_sample, args=(state, lock), daemon=True).start()
     return "advanced"
-
-
-def mark_broken_skipped(state: ScoringState, lock: threading.Lock, uuid: str, error: str) -> None:
-    """Mark a sample skipped due to a setup failure, recording the error."""
-    with lock:
-        for entry in state["queue"]:
-            if entry["uuid"] == uuid:
-                entry["status"] = "skipped"
-                entry["error"] = error
-                touched = state["tracking_touched"]
-                set_status(state["tracking"], uuid, STATUS_SKIPPED, touched=touched)
-                save_tracking(state["samples_dir"], state["tracking"], touched)
-                touched.clear()
-                return
 
 
 def save_state(state: ScoringState) -> None:
@@ -406,7 +385,6 @@ def rebuild_queue_after_selection(state: ScoringState, lock: threading.Lock) -> 
         state["container_name"] = container_name
         state["setup_state"] = {"status": setup_status}
         state.pop("pending_task_selection", None)
-        state.pop("pending_broken", None)
         populate_tracking_from_queue(tracking, queue, touched=touched)
         save_tracking(samples_dir, tracking, touched)
         touched.clear()
@@ -541,7 +519,6 @@ def _run_app(args: argparse.Namespace, state: ScoringState, lock: threading.Lock
         lock=lock,
         advance_fn=lambda: advance_to_next(state, lock),
         save_fn=save_state,
-        mark_broken_skipped_fn=lambda uuid, error: mark_broken_skipped(state, lock, uuid, error),
         rebuild_queue_fn=lambda: rebuild_queue_after_selection(state, lock),
     )
 
