@@ -151,11 +151,12 @@ def sample_task_name(data: dict[str, Any]) -> str:
 def _sample_info(data: dict[str, Any], uuid: str = "") -> SampleInfo:
     """Build a :class:`SampleInfo` from a ``sample.json`` dict (``{}`` if none).
 
-    ``run_uuid`` falls back to ``uuid`` (the sample dir name) when ``sample.json``
-    doesn't carry it — the dir name is the sample's run UUID.
+    ``run_uuid`` is ``uuid`` — the sample dir name, which is the single canonical
+    identifier the whole tool keys on (queue, ``ui_state.jsonl``,
+    ``scores.jsonl``). Any ``run_uuid`` inside ``sample.json`` is ignored.
     """
     return {
-        "run_uuid": str(data.get("run_uuid") or uuid or ""),
+        "run_uuid": uuid,
         "task_name": sample_task_name(data),
         "task_version": str(data.get("task_version", "") or ""),
         "task_variant": str(data.get("task_variant") or data.get("variant") or ""),
@@ -169,11 +170,11 @@ def local_sample_info(uuid: str, samples_dir: Path) -> SampleInfo:
     """Build a :class:`SampleInfo` from the sample dir's ``sample.json``.
 
     Recognized ``sample.json`` keys: ``task`` (task name), ``image`` (the image
-    tarball filename inside the images dir), and optionally ``run_uuid`` /
-    ``task_variant`` / ``project_dir``. Scoring works even with no
-    ``sample.json`` (the form only needs the project dir and the guidance
-    links); ``no_metadata`` then drives an explanatory banner and the image
-    must be supplied via ``--image``.
+    tarball filename inside the images dir), and optionally ``task_variant`` /
+    ``project_dir``. The sample's ``run_uuid`` is the dir name, not a
+    ``sample.json`` field. Scoring works even with no ``sample.json`` (the form
+    only needs the project dir and the guidance links); ``no_metadata`` then
+    drives an explanatory banner and the image must be supplied via ``--image``.
     """
     return _sample_info(load_sample_json(samples_dir, uuid), uuid)
 

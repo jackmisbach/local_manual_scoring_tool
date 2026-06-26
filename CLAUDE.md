@@ -33,7 +33,8 @@ Key invariants (do not reintroduce what was stripped):
 - `scoring/state.py` — TypedDicts for the shared `ScoringState` / `QueueEntry` /
   `SampleInfo`, plus `sample.json` loading (`load_sample_json`,
   `local_sample_info`). Recognized `sample.json` keys: `task` (or `task_name`),
-  `image`, and optionally `run_uuid` / `task_variant` / `project_dir`.
+  `image`, and optionally `task_variant` / `project_dir`. A sample's `run_uuid`
+  is its dir name, not a `sample.json` field.
 - `scoring/store.py` — the on-disk JSONL store (see below). Tracking view + score
   (working/UI) view over `ui_state.jsonl`, plus the `scores.jsonl` export and
   `.task_scratchpads.json` per-task notes.
