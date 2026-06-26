@@ -275,16 +275,6 @@
                 {% elif not pending_summary %}
                 <a class="back-link" href="/">&larr; Back</a>
                 {% endif %}
-                {% if pending_session_count > 0 %}
-                <button type="button" class="btn-primary" id="push-session-btn" onclick="pushPending('session')">
-                    Push {{ pending_session_count }} from this session
-                </button>
-                {% endif %}
-                {% if pending_all_count > pending_session_count %}
-                <button type="button" class="btn-primary" id="push-all-btn" onclick="pushPending('all')">
-                    Push {{ pending_all_count }} from all pending
-                </button>
-                {% endif %}
                 <button type="button" class="btn-danger" id="exit-btn" onclick="exitTool()">Exit</button>
             </div>
         </div>
@@ -299,7 +289,6 @@
         {% set open_samples = queue | selectattr("status", "equalto", "open") | list %}
         {% set stashed = queue | selectattr("has_stash", "defined") | list %}
         {% set errored = skipped | selectattr("error", "defined") | list %}
-        {% set pending_push = pending_score + pending_done %}
         {% set submitted = scored_only + pending_score + pending_done + done %}
         {% set scores = submitted | map(attribute="score") | select("number") | list %}
         <div class="stats">
@@ -308,9 +297,6 @@
             <span><strong>Scored:</strong> {{ submitted | length }}</span>
             {% if done or pending_done %}
             <span><strong>Done:</strong> {{ done | length + pending_done | length }}</span>
-            {% endif %}
-            {% if pending_push %}
-            <span><strong>Pending push:</strong> {{ pending_push | length }}</span>
             {% endif %}
             <span><strong>Skipped:</strong> {{ skipped | length }}{% if errored %} ({{ errored | length }} due to errors){% endif %}</span>
             {% if running %}
@@ -330,9 +316,6 @@
             <button type="button" class="filter-chip" data-filter="scored">Scored</button>
             {% if done or pending_done %}
             <button type="button" class="filter-chip" data-filter="done">Done ({{ done | length + pending_done | length }})</button>
-            {% endif %}
-            {% if pending_push %}
-            <button type="button" class="filter-chip" data-filter="pending">Pending push ({{ pending_push | length }})</button>
             {% endif %}
             <button type="button" class="filter-chip" data-filter="skipped">Skipped</button>
             {% if stashed %}
@@ -424,9 +407,7 @@
                     // "stashed" is orthogonal to the scoring-status enum.
                     // Virtual filters: "scored" covers any row with a score
                     // (scored/pending_score/pending_done/done); "done"
-                    // covers user-finished rows (done + pending_done);
-                    // "pending" covers anything that needs pushing
-                    // (pending_score + pending_done).
+                    // covers user-finished rows (done + pending_done).
                     const status = tr.dataset.status;
                     const matchesStatus =
                         activeFilter === "all"
@@ -439,9 +420,6 @@
                         ))
                         || (activeFilter === "done" && (
                             status === "done" || status === "pending_done"
-                        ))
-                        || (activeFilter === "pending" && (
-                            status === "pending_score" || status === "pending_done"
                         ))
                         || status === activeFilter;
                     const matchesSearch =
@@ -533,42 +511,6 @@
                     await fetch("/api/exit", { method: "POST" });
                 } catch {}
                 document.body.innerHTML = '<p style="padding: 40px; text-align: center; color: #666">Scoring tool stopped. You can close this tab.</p>';
-            }
-
-            async function pushPending(scope) {
-                const btnId = scope === "session" ? "push-session-btn" : "push-all-btn";
-                const btn = document.getElementById(btnId);
-                if (!btn) return;
-                const originalLabel = btn.textContent;
-                btn.disabled = true;
-                btn.textContent = "Pushing...";
-                try {
-                    const resp = await fetch("/api/push-all-pending", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ scope }),
-                    });
-                    const data = await resp.json();
-                    if (resp.status === 503) {
-                        alert(data.error || "Push disabled.");
-                        btn.disabled = false;
-                        btn.textContent = originalLabel;
-                        return;
-                    }
-                    if (data.success) {
-                        window.location.reload();
-                        return;
-                    }
-                    const failureSummary = (data.failures || [])
-                        .map(f => `${f.uuid.slice(0, 8)}: ${f.error}`)
-                        .join("\n");
-                    alert("Push completed with failures:\n" + failureSummary);
-                    window.location.reload();
-                } catch (err) {
-                    alert("Error: " + err.message);
-                    btn.disabled = false;
-                    btn.textContent = originalLabel;
-                }
             }
 
             async function navigateTo(index) {

@@ -617,12 +617,6 @@
                 padding: 6px 14px;
                 border-radius: 4px;
             }
-            .local-pending-warning .push-msg {
-                flex-basis: 100%;
-                font-size: 0.85em;
-                color: #856404;
-                margin-top: 4px;
-            }
 
             label {
                 display: block;
@@ -1018,37 +1012,6 @@
                     style="font-size: 0.65em; text-decoration: none; margin-left: 6px; vertical-align: middle; {% if not info.viewer_url %}display: none;{% endif %}"
                     >&#x2197;</a
                 >
-                <span
-                    id="info-refresh-spinner"
-                    title="Checking Hawk for updates..."
-                    style="
-                        display: {% if info_needs_refresh %}inline-block{% else %}none{% endif %};
-                        margin-left: 10px;
-                        width: 12px;
-                        height: 12px;
-                        border: 2px solid #cbd5e1;
-                        border-top-color: #1e40af;
-                        border-radius: 50%;
-                        animation: info-refresh-spin 0.8s linear infinite;
-                        vertical-align: middle;
-                    "
-                ></span>
-                <span
-                    id="info-refresh-pill"
-                    style="
-                        display: none;
-                        margin-left: 10px;
-                        padding: 2px 10px;
-                        font-size: 0.55em;
-                        font-weight: 600;
-                        background: #dbeafe;
-                        color: #1e3a8a;
-                        border-radius: 999px;
-                        vertical-align: middle;
-                        cursor: default;
-                    "
-                    title="Local metadata cache was outdated; the page now shows fresh data from Hawk."
-                >Data updated from Hawk</span>
             </h1>
             <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap">
                 <label
@@ -1099,16 +1062,6 @@ Total: {{ '{:,}'.format(info.total_tokens) if info.total_tokens is not none else
                 <span><strong>Status:</strong> <span data-info-field="status">{{ info.status or '?' }}</span></span>
             </div>
         </details>
-        {% endif %}
-
-        {% if hawk and has_local_pending %}
-        <div class="local-pending-warning">
-            <strong>This sample has local score(s) that have not been pushed to Hawk.</strong>
-            <button type="button" class="btn-warning" id="push-sample-btn" onclick="pushSampleToHawk()">
-                Push this sample to Hawk
-            </button>
-            <p id="push-sample-msg" class="push-msg" style="display: none"></p>
-        </div>
         {% endif %}
 
         {% if info.no_metadata %}
@@ -1549,13 +1502,6 @@ Total: {{ '{:,}'.format(info.total_tokens) if info.total_tokens is not none else
         </div>
 
         <script>
-            // Set when the page rendered from cached metadata instead of a
-            // fresh Hawk fetch (see /api/navigate fast path). Triggers a
-            // background /api/refresh-info call that updates the run-info
-            // fields in place and shows the "Data updated from Hawk" pill
-            // if anything differs.
-            const INFO_NEEDS_REFRESH = {{ info_needs_refresh | tojson }};
-            const HAWK_MODE = {{ hawk | tojson }};
             // Mutable: refreshed after every successful stash POST so the
             // Restore button always pulls in the most recently stashed
             // values, even if the user has stashed several times this
@@ -2275,139 +2221,6 @@ Total: {{ '{:,}'.format(info.total_tokens) if info.total_tokens is not none else
             }
 
             pollSetupStatus();
-
-            // Per-field formatters for /api/refresh-info's JSON payload.
-            // Mirrors the Jinja template's display formatting so a refreshed
-            // value drops in looking identical to a server-rendered one.
-            function fmtDurationJS(seconds) {
-                if (seconds === null || seconds === undefined) return "?";
-                const h = Math.floor(seconds / 3600);
-                const m = Math.floor((seconds % 3600) / 60);
-                return h > 0 ? `${h}h ${m}m` : `${m}m`;
-            }
-            function fmtTokensJS(n) {
-                if (n === null || n === undefined) return "?";
-                if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
-                if (n >= 1_000) return Math.round(n / 1_000) + "K";
-                return String(n);
-            }
-            function fmtIntJS(n) { return n === null || n === undefined ? "?" : String(n); }
-            function fmtCommaJS(n) {
-                return n === null || n === undefined ? "?" : n.toLocaleString("en-US");
-            }
-            function infoFieldValue(field, info) {
-                switch (field) {
-                    case "model": return info.model || "?";
-                    case "task_variant": return info.task_variant || "?";
-                    case "task_version": return info.task_version || "?";
-                    case "eval_set_id": return info.eval_set_id || "?";
-                    case "created_by": return info.created_by || "?";
-                    case "duration":
-                        return `${fmtDurationJS(info.working_time_seconds)} working / ${fmtDurationJS(info.total_time_seconds)} total`;
-                    case "total_tokens_short": return fmtTokensJS(info.total_tokens);
-                    case "message_count": return fmtIntJS(info.message_count);
-                    case "action_count": return fmtIntJS(info.action_count);
-                    case "status": return info.status || "?";
-                    case "title-task": {
-                        const name = info.task_name || "";
-                        return info.task_variant ? `${name} / ${info.task_variant}` : name;
-                    }
-                    default: return null;
-                }
-            }
-            function buildTokenTooltip(info) {
-                return [
-                    `Input: ${fmtCommaJS(info.input_tokens)}`,
-                    `Cache read: ${fmtCommaJS(info.cache_read_tokens)}`,
-                    `Cache write: ${fmtCommaJS(info.cache_write_tokens)}`,
-                    `Output: ${fmtCommaJS(info.output_tokens)}`,
-                    `Reasoning: ${fmtCommaJS(info.reasoning_tokens)}`,
-                    `Total: ${fmtCommaJS(info.total_tokens)}`,
-                ].join("\n");
-            }
-
-            function applyRefreshedInfo(info, changedFields) {
-                document.querySelectorAll("[data-info-field]").forEach(el => {
-                    const field = el.dataset.infoField;
-                    if (field === "tokens-tooltip") {
-                        el.title = buildTokenTooltip(info);
-                        return;
-                    }
-                    const v = infoFieldValue(field, info);
-                    if (v !== null) el.textContent = v;
-                });
-                const viewerLink = document.getElementById("viewer-url-link");
-                if (viewerLink) {
-                    if (info.viewer_url) {
-                        viewerLink.href = info.viewer_url;
-                        viewerLink.style.display = "";
-                    } else {
-                        viewerLink.removeAttribute("href");
-                        viewerLink.style.display = "none";
-                    }
-                }
-                const titleEl = document.querySelector("title");
-                if (titleEl) {
-                    const variant = info.task_variant ? ` / ${info.task_variant}` : "";
-                    titleEl.textContent = `${info.task_name || ""}${variant} / {{ uuid }}`;
-                }
-                if (changedFields && changedFields.length > 0) {
-                    const pill = document.getElementById("info-refresh-pill");
-                    if (pill) {
-                        pill.style.display = "inline-block";
-                        pill.title = "Local cache was outdated. Updated fields: "
-                            + changedFields.join(", ");
-                    }
-                }
-            }
-
-            async function refreshInfoFromHawk() {
-                const spinner = document.getElementById("info-refresh-spinner");
-                const fetchingBanner = document.getElementById("info-fetching-banner");
-                if (spinner) spinner.style.display = "inline-block";
-                let succeeded = false;
-                try {
-                    const resp = await fetch("/api/refresh-info", { method: "POST" });
-                    const data = await resp.json();
-                    if (!data.success) return;
-                    succeeded = true;
-                    // No prior metadata -> the run-info section and instructions
-                    // panels weren't in the DOM. Reload so the template renders
-                    // them with the freshly-cached values. autoStashIfDirty
-                    // preserves any in-progress form state.
-                    const wasNoMetadata = {{ info.no_metadata | tojson }};
-                    const structuralChange = wasNoMetadata && data.info && !data.info.no_metadata;
-                    const instructionsChanged = (data.changed_fields || []).some(
-                        f => f === "scoring_instructions" || f === "task_instructions"
-                    );
-                    if (structuralChange || instructionsChanged) {
-                        await autoStashIfDirty();
-                        window.location.reload();
-                        return;
-                    }
-                    applyRefreshedInfo(data.info, data.changed_fields || []);
-                } catch (err) {
-                    /* Refresh is best-effort; cached data is still valid. */
-                } finally {
-                    if (spinner) spinner.style.display = "none";
-                    if (fetchingBanner && !succeeded) {
-                        // Refresh failed and we never had cached metadata.
-                        // Swap the "Fetching..." spinner banner for the static
-                        // "No cached metadata" warning so the user knows the
-                        // page won't update on its own.
-                        fetchingBanner.innerHTML = "<strong>Couldn't reach Hawk to fetch metadata.</strong>"
-                            + " <span style='flex: 1'>Cached data is unavailable for this sample."
-                            + " Check connectivity or run <code>manual-score --prefetch URL</code>"
-                            + " while Hawk is reachable.</span>";
-                    } else if (fetchingBanner && succeeded) {
-                        fetchingBanner.style.display = "none";
-                    }
-                }
-            }
-
-            if (INFO_NEEDS_REFRESH && HAWK_MODE) {
-                refreshInfoFromHawk();
-            }
 
             function collectForm() {
                 const body = {};
@@ -3195,45 +3008,6 @@ Total: {{ '{:,}'.format(info.total_tokens) if info.total_tokens is not none else
                     }
                 }
                 return best;
-            }
-
-            async function pushSampleToHawk() {
-                const btn = document.getElementById("push-sample-btn");
-                const msg = document.getElementById("push-sample-msg");
-                btn.disabled = true;
-                btn.textContent = "Pushing...";
-                msg.style.display = "none";
-                msg.textContent = "";
-                try {
-                    const resp = await fetch("/api/push-sample-to-hawk", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ uuid: {{ uuid | tojson }} }),
-                    });
-                    const data = await resp.json();
-                    if (resp.status === 503) {
-                        msg.style.display = "block";
-                        msg.textContent = data.error || "Push disabled.";
-                        btn.disabled = false;
-                        btn.textContent = "Push this sample to Hawk";
-                        return;
-                    }
-                    if (data.success) {
-                        window.location.reload();
-                        return;
-                    }
-                    msg.style.display = "block";
-                    msg.textContent =
-                        "Push failed: " +
-                        (data.failures || []).map(f => f.error).join("; ");
-                    btn.disabled = false;
-                    btn.textContent = "Push this sample to Hawk";
-                } catch (err) {
-                    msg.style.display = "block";
-                    msg.textContent = "Error: " + err.message;
-                    btn.disabled = false;
-                    btn.textContent = "Push this sample to Hawk";
-                }
             }
 
             async function toggleAttach() {
