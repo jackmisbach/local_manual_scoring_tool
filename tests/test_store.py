@@ -2,10 +2,12 @@
 
 Covers the two files at the samples root:
 
-- ``ui_state.jsonl``: keyed per-sample records holding both the tracking subset
-  (status / updated_at / stashed) and the working/UI subset
-  (history / stash / finish_events / scratchpad / timers); and
-- ``scores.jsonl``: the append-only flat export of finalized scores.
+- ``history.jsonl``: keyed per-sample records holding the working/UI subset
+  (history / stash / finished_at / scratchpad / timers) plus the lone
+  persisted ``skipped`` flag; and
+- ``scores.jsonl``: the flat export of finalized scores, generated on demand
+  (see :func:`scoring.export.export_scores` and ``test_export.py``). Only the
+  pure row builder (:func:`scoring.store.build_score_row`) lives here.
 
 All I/O is against a tmp dir, so these tests need no Docker, network, or Hawk.
 """
@@ -14,28 +16,28 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
 from scoring.store import (
-    SCORES_FILENAME,
+    HISTORY_FILENAME,
     STATUS_DONE,
     STATUS_OPEN,
     STATUS_SCORED,
     STATUS_SKIPPED,
-    UI_STATE_FILENAME,
     SavedScore,
-    TrackedSample,
-    append_finish_event,
     append_history,
-    append_score_jsonl,
+    build_score_row,
+    clear_finished,
     clear_stash,
+    derive_queue_status,
     derive_status_from_score_file,
     has_finish_event,
+    history_path,
+    iter_score_files,
     load_score_file,
-    load_tracking,
+    load_skipped,
     save_stash,
-    save_tracking,
-    ui_state_path,
+    set_finished,
+    set_skipped,
 )
 
 UUID = "abcdefghijklmnopqrstuv"
@@ -59,44 +61,69 @@ def _entry(value: float = 0.5, minutes: float = 7.0, author: str = SCORER) -> Sa
     }
 
 
-# --- tracking round-trip --------------------------------------------------
+# --- skip flag ------------------------------------------------------------
 
 
-def test_tracking_round_trips_through_ui_state(tmp_path: Path) -> None:
-    tracking: dict[str, TrackedSample] = {
-        UUID: {
-            "status": STATUS_SCORED,
-            "updated_at": "2026-06-25T00:00:00Z",
-        }
-    }
-    save_tracking(tmp_path, tracking, [UUID])
+def test_set_and_load_skipped(tmp_path: Path) -> None:
+    assert load_skipped(tmp_path) == set()
+    set_skipped(tmp_path, UUID)
 
-    assert ui_state_path(tmp_path) == tmp_path / UI_STATE_FILENAME
-    assert ui_state_path(tmp_path).exists()
+    assert history_path(tmp_path) == tmp_path / HISTORY_FILENAME
+    assert load_skipped(tmp_path) == {UUID}
 
-    loaded = load_tracking(tmp_path)
-    assert loaded[UUID]["status"] == STATUS_SCORED
-    assert loaded[UUID]["updated_at"] == "2026-06-25T00:00:00Z"
-    # No stash draft -> the stashed flag is absent (treated as False).
-    assert "stashed" not in loaded[UUID]
+    # Clearing the flag leaves a bare record, which is dropped on rewrite.
+    set_skipped(tmp_path, UUID, False)
+    assert load_skipped(tmp_path) == set()
+    assert not history_path(tmp_path).read_text(encoding="utf-8").strip()
 
 
-def test_save_tracking_only_rewrites_touched_rows(tmp_path: Path) -> None:
-    """A second writer that touches one id leaves the other id's row intact."""
-    save_tracking(
-        tmp_path,
-        {UUID: {"status": STATUS_OPEN, "updated_at": "t1"}},
-        [UUID],
+def test_skip_flag_survives_score_writes(tmp_path: Path) -> None:
+    """A real score landing on a skipped sample preserves the skip flag."""
+    set_skipped(tmp_path, UUID)
+    append_history(tmp_path, UUID, _entry())
+    assert load_skipped(tmp_path) == {UUID}
+    score_file = load_score_file(tmp_path, UUID)
+    assert score_file is not None
+    assert len(score_file["history"]) == 1
+
+
+def test_write_drops_legacy_tracking_keys(tmp_path: Path) -> None:
+    """A record with only legacy tracking keys is dropped on the next rewrite."""
+    history_path(tmp_path).write_text(
+        json.dumps({"id": UUID, "status": "open", "updated_at": "t", "stashed": True}) + "\n",
+        encoding="utf-8",
     )
+    # Any write rewrites the whole file; the legacy-only row has no recognized
+    # content and is omitted, while the touched sample is written.
     other = "zzzzzzzzzzzzzzzzzzzzzz"
-    save_tracking(
-        tmp_path,
-        {other: {"status": STATUS_SKIPPED, "updated_at": "t2"}},
-        [other],
-    )
-    loaded = load_tracking(tmp_path)
-    assert loaded[UUID]["status"] == STATUS_OPEN
-    assert loaded[other]["status"] == STATUS_SKIPPED
+    append_history(tmp_path, other, _entry())
+    ids = {
+        json.loads(line)["id"]
+        for line in history_path(tmp_path).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    }
+    assert ids == {other}
+
+
+# --- derive_queue_status --------------------------------------------------
+
+
+def test_derive_queue_status_skip_precedence(tmp_path: Path) -> None:
+    # Untouched + skip flag -> skipped; include_skipped re-surfaces as open.
+    assert derive_queue_status(None, skipped=False) == STATUS_OPEN
+    assert derive_queue_status(None, skipped=True) == STATUS_SKIPPED
+    assert derive_queue_status(None, skipped=True, include_skipped=True) == STATUS_OPEN
+
+    # A real score outranks the skip flag (no need to ever clear it).
+    append_history(tmp_path, UUID, _entry())
+    scored = load_score_file(tmp_path, UUID)
+    assert derive_queue_status(scored, skipped=True) == STATUS_SCORED
+
+    # Finish wins; include_done demotes done back to scored.
+    set_finished(tmp_path, UUID)
+    done = load_score_file(tmp_path, UUID)
+    assert derive_queue_status(done, skipped=True) == STATUS_DONE
+    assert derive_queue_status(done, skipped=True, include_done=True) == STATUS_SCORED
 
 
 # --- history --------------------------------------------------------------
@@ -118,13 +145,9 @@ def test_load_score_file_missing_returns_none(tmp_path: Path) -> None:
     assert load_score_file(tmp_path, UUID) is None
 
 
-def test_bare_tracking_row_has_no_score_file(tmp_path: Path) -> None:
-    """A sample with only a tracking row (no score keys) reads as no score file."""
-    save_tracking(
-        tmp_path,
-        {UUID: {"status": STATUS_OPEN, "updated_at": "t"}},
-        [UUID],
-    )
+def test_skip_only_record_has_no_score_file(tmp_path: Path) -> None:
+    """A sample with only a skip flag (no score keys) reads as no score file."""
+    set_skipped(tmp_path, UUID)
     assert load_score_file(tmp_path, UUID) is None
 
 
@@ -167,41 +190,43 @@ def test_derive_status_scored_when_history_exists(tmp_path: Path) -> None:
     assert derive_status_from_score_file(score_file, STATUS_OPEN) == STATUS_SCORED
 
 
-def test_derive_status_done_when_finish_event(tmp_path: Path) -> None:
+def test_derive_status_done_when_finished(tmp_path: Path) -> None:
     append_history(tmp_path, UUID, _entry())
-    append_finish_event(tmp_path, UUID, SCORER)
+    set_finished(tmp_path, UUID)
     score_file = load_score_file(tmp_path, UUID)
     assert has_finish_event(score_file) is True
     # Finish wins over scored.
     assert derive_status_from_score_file(score_file, STATUS_OPEN) == STATUS_DONE
 
 
-# --- finish events --------------------------------------------------------
+# --- finished flag --------------------------------------------------------
 
 
-def test_append_finish_event_records_author_and_timestamp(tmp_path: Path) -> None:
-    append_finish_event(tmp_path, UUID, SCORER)
+def test_set_finished_records_timestamp(tmp_path: Path) -> None:
+    set_finished(tmp_path, UUID)
     score_file = load_score_file(tmp_path, UUID)
     assert score_file is not None
-    events = score_file.get("finish_events") or []
-    assert len(events) == 1
-    assert events[0]["author"] == SCORER
-    assert isinstance(events[0].get("sent_at"), str)
+    assert has_finish_event(score_file) is True
+    finished_at = score_file.get("finished_at")
+    assert isinstance(finished_at, str)
+    assert finished_at
 
 
-# --- scores.jsonl flat export ---------------------------------------------
+def test_clear_finished_drops_timestamp(tmp_path: Path) -> None:
+    set_finished(tmp_path, UUID)
+    clear_finished(tmp_path, UUID)
+    score_file = load_score_file(tmp_path, UUID)
+    # The bare record (only the dropped flag) is omitted entirely on rewrite.
+    assert has_finish_event(score_file) is False
 
 
-def test_append_score_jsonl_writes_flat_parseable_line(tmp_path: Path) -> None:
+# --- build_score_row (pure flat-row builder) ------------------------------
+
+
+def test_build_score_row_shape_and_fields() -> None:
     entry = _entry(value=0.6, minutes=15)
-    info: dict[str, Any] = {"task_name": "demo"}
-    path = append_score_jsonl(tmp_path, UUID, entry, info)
+    row = build_score_row(UUID, entry, "demo")
 
-    assert path == tmp_path / SCORES_FILENAME
-    assert path.exists()
-    lines = [l for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
-    assert len(lines) == 1
-    row = json.loads(lines[0])
     assert set(row) == {
         "id",
         "scorer",
@@ -212,6 +237,7 @@ def test_append_score_jsonl_writes_flat_parseable_line(tmp_path: Path) -> None:
         "task_name",
     }
     assert row["id"] == UUID
+    # scorer prefers score.metadata.author over the constant entry.scorer.
     assert row["scorer"] == SCORER
     assert row["value"] == 0.6
     assert row["explanation"] == "because"
@@ -220,11 +246,25 @@ def test_append_score_jsonl_writes_flat_parseable_line(tmp_path: Path) -> None:
     assert row["task_name"] == "demo"
 
 
-def test_append_score_jsonl_appends(tmp_path: Path) -> None:
-    info: dict[str, Any] = {"task_name": "demo"}
-    append_score_jsonl(tmp_path, UUID, _entry(value=0.1), info)
-    append_score_jsonl(tmp_path, UUID, _entry(value=0.2), info)
-    path = tmp_path / SCORES_FILENAME
-    lines = [l for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
-    assert len(lines) == 2
-    assert [json.loads(l)["value"] for l in lines] == [0.1, 0.2]
+def test_build_score_row_falls_back_to_constant_scorer() -> None:
+    """With no metadata author, the constant ``entry.scorer`` is used."""
+    entry: SavedScore = {"scorer": "manual_score", "score": {"value": 0.5}}
+    row = build_score_row(UUID, entry, "")
+    assert row["scorer"] == "manual_score"
+    # scored_at always present (current time when absent from metadata).
+    assert isinstance(row["scored_at"], str)
+    assert row["scored_at"]
+    assert row["task_name"] == ""
+
+
+# --- iter_score_files -----------------------------------------------------
+
+
+def test_iter_score_files_skips_skip_only_records(tmp_path: Path) -> None:
+    other = "zzzzzzzzzzzzzzzzzzzzzz"
+    append_history(tmp_path, UUID, _entry(value=0.4))
+    set_skipped(tmp_path, other)  # skip-only record has no score content
+
+    by_id = dict(iter_score_files(tmp_path))
+    assert set(by_id) == {UUID}
+    assert [e["score"]["value"] for e in by_id[UUID]["history"]] == [0.4]

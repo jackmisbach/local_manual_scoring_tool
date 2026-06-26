@@ -88,6 +88,7 @@ ignore = [
     "DTZ005",
     "E501",
     "F401",
+    "ISC001",
     "Q003",
     "Q004",
     "S101",
@@ -146,3 +147,8 @@ reportMissingImports = "warning"
 reportMissingTypeArgument = "warning"
 reportUnusedFunction = "warning"  # Flask @app.route handlers are registered, not called
 reportUnusedParameter = "warning"
+
+[[tool.pyright.executionEnvironments]]
+root = "tests"
+reportTypedDictNotRequiredAccess = false
+reportUnusedFunction = false  # autouse pytest fixtures are registered, not called

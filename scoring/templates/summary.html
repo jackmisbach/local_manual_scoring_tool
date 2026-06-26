@@ -314,22 +314,22 @@
                     data-has-stash="{{ '1' if s.has_stash else '' }}"
                     data-index="{{ loop.index0 }}"
                     data-uuid="{{ s.uuid }}"
-                    data-task="{{ (s.sample_id or s.task_name) | lower }}"
+                    data-task="{{ s.task_name | lower }}"
                     data-score="{{ s.score if s.score is defined and s.score is not none else '' }}"
                     data-minutes="{{ s.minutes_to_score if s.minutes_to_score is defined and s.minutes_to_score is not none else '' }}"
                     data-status-sort="{{ s.status }}"
                     data-date="{{ ts }}"
-                    data-search="{{ (s.uuid ~ ' ' ~ (s.sample_id or '') ~ ' ' ~ s.task_name ~ ' ' ~ (s.explanation if s.explanation is defined else '')) | lower }}"
+                    data-search="{{ (s.uuid ~ ' ' ~ s.task_name ~ ' ' ~ (s.explanation if s.explanation is defined else '')) | lower }}"
                 >
                     <td>{{ loop.index }}</td>
                     <td><code class="guid-copy" title="Click to copy {{ s.uuid }}" data-guid="{{ s.uuid }}">{{ s.uuid[:8] }}</code></td>
                     <td>
                         {% if can_navigate %}
                         <button type="button" class="back-link" onclick="navigateTo({{ loop.index0 }})">
-                            {{ s.sample_id[:60] if s.sample_id else s.task_name }}
+                            {{ s.task_name }}
                         </button>
                         {% else %}
-                        {{ s.sample_id[:60] if s.sample_id else s.task_name }}
+                        {{ s.task_name }}
                         {% endif %}
                     </td>
                     <td class="score">{{ s.score if s.score is defined and s.score is not none else '—' }}</td>

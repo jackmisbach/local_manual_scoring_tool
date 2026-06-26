@@ -18,26 +18,35 @@ Key invariants (do not reintroduce what was stripped):
   field anywhere in the tool (not in `sample.json`, the queue, or `scores.jsonl`).
 - **Images are tarballs loaded on demand.** No `docker pull`. The tool reads a
   `docker save` tarball's `RepoTag` and `docker load`s it if not already present.
-- **Outputs:** finalized scores go to `scores.jsonl`; all working/UI state goes
-  to `ui_state.jsonl`. There are no per-sample `_score.json` files and no
-  `tracking.json` (those upstream files are collapsed into `ui_state.jsonl`).
+- **Outputs:** all scoring + working/UI state goes to `history.jsonl` (each
+  sample's score history lives there). `scores.jsonl` is a flat export
+  **generated on demand** by `local-manual-score export` (never written on
+  submit, never read by the tool). There are no per-sample `_score.json` files
+  and no `tracking.json` (those upstream files are collapsed into
+  `history.jsonl`).
 
 ## Module map
 
 - `scoring/__main__.py` — `main()` CLI entry point. Arg parsing, sample
   discovery, queue building (`build_local_queue`, sorted by task and shuffled
   within task groups), per-sample container setup in a background thread
-  (`_setup_sample`), and `advance_to_next`. Also routes `config` subcommands.
+  (`_setup_sample`), and `advance_to_next`. Also routes the `config` and
+  `export` subcommands.
 - `scoring/app.py` — `create_app()`: Flask routes / JSON API for the scoring UI
   (scoring page, submit, skip, done, scratchpad, timers, task selection, exit).
 - `scoring/state.py` — TypedDicts for the shared `ScoringState` / `QueueEntry` /
   `SampleInfo`, plus `sample.json` loading (`load_sample_json`,
   `local_sample_info`). Recognized `sample.json` keys: `task` (or `task_name`),
-  `image`, and optionally `task_variant` / `project_dir`. A sample's `run_uuid`
+  `image`, and optionally `task_variant` / `project_dir`. A sample's `uuid`
   is its dir name, not a `sample.json` field.
-- `scoring/store.py` — the on-disk JSONL store (see below). Tracking view + score
-  (working/UI) view over `ui_state.jsonl`, plus the `scores.jsonl` export and
-  `.task_scratchpads.json` per-task notes.
+- `scoring/store.py` — the on-disk JSONL store (see below). The working/UI view
+  plus the persisted `skipped` flag over `history.jsonl` (status is derived via
+  `derive_queue_status`), and the pure `scores.jsonl` row builder
+  (`build_score_row`) + the read-only `iter_score_files` walker.
+- `scoring/export.py` — `export_scores(samples_dir)`: (re)builds `scores.jsonl`
+  from `history.jsonl` history, joining each entry's `task_name` from
+  `state.load_sample_json`. The join layer keeps store free of a `state`
+  dependency. Backs `local-manual-score export`.
 - `scoring/infra.py` — Docker + image loading. `ensure_task_image` (read tag
   from tarball manifest, reuse-or-`docker load`), `start_container` (bind-mounts
   the sample's `project/`, forwards ports, installs `requirements.txt`),
@@ -59,15 +68,16 @@ working tree, bind-mounted into the container) and an optional `sample.json`.
 
 JSONL / state files at the samples root:
 
-- `scores.jsonl` — append-only canonical export, one flat line per finalized
-  score: `id`, `scorer`, `value`, `explanation`, `minutes_to_score`,
-  `scored_at`, `task_name`.
-- `ui_state.jsonl` — one line per sample (keyed by `id`), holding both the
-  tracking subset (`status`, `eval_set_id`, `updated_at`, `stashed`) and the
-  working/UI subset (`history`, `stash`, `finish_events`, `scratchpad`,
-  `timers`). Read-modify-rewrite under a module lock.
-- `.task_scratchpads.json` — reusable per-task / per-variant notes, seeded into a
-  sample's scratch pad when opened.
+- `scores.jsonl` — canonical flat export, **generated on demand** by
+  `local-manual-score export` (overwritten from `history.jsonl` history; never
+  written on submit, never read by the tool). One flat line per finalized score:
+  `id`, `scorer`, `value`, `explanation`, `minutes_to_score`, `scored_at`,
+  `task_name`.
+- `history.jsonl` — one line per sample (keyed by `id`), holding the persisted
+  `skipped` flag plus the working/UI subset (`history`, `stash`,
+  `finished_at`, `scratchpad`, `timers`). The `scratchpad` is free-form
+  per-sample notes (no task/variant sharing). Status is derived from this
+  content, not stored. Read-modify-rewrite under a module lock.
 
 Image tarballs live in the images dir as `<task>-<version>.tar` (named by
 `dev/download_starting_image.py`). A sample's `sample.json` `image` field is the

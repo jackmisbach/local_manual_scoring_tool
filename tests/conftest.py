@@ -10,10 +10,10 @@ Each test gets:
   :class:`~scoring.state.ScoringState` and ``no_container=True`` so no Docker
   is touched.
 
-There is no Hawk in this fork: scores live in two JSONL files at the samples
-root (``ui_state.jsonl`` and ``scores.jsonl``), so the routes do real on-disk
-reads/writes against the tmp dir and there is nothing to monkeypatch at the
-network boundary.
+There is no Hawk in this fork: scores live in ``history.jsonl`` at the samples
+root (``scores.jsonl`` is a generated export, not written on submit — see
+test_export.py), so the routes do real on-disk reads/writes against the tmp dir
+and there is nothing to monkeypatch at the network boundary.
 
 Config (scorer email, task selection, task guidance, the change banner) lives
 in a per-user config file under ``$XDG_CONFIG_HOME``; an autouse fixture points
@@ -31,9 +31,7 @@ import pytest
 from flask.testing import FlaskClient
 
 from scoring import app as app_module
-from scoring.__main__ import save_state
 from scoring.state import ScoringState, local_sample_info
-from scoring.store import STATUS_OPEN, TrackedSample
 
 SAMPLE_UUID = "abcdefghijklmnopqrstuv"  # 22 chars
 SCORER_EMAIL = "alice@metr.org"
@@ -44,7 +42,9 @@ SAMPLE_IMAGE = "test_task.tar"
 
 
 @pytest.fixture(autouse=True)
-def isolated_config(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+def _isolated_config(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Redirect the per-user config dir to a tmp dir for every test.
 
     Keeps reads/writes from :mod:`scoring.config` (scorer email, task selection,
@@ -67,21 +67,13 @@ def _make_sample_dir(root: Path, uuid: str, task: str, image: str) -> None:
 
 
 def _build_state(samples_dir: Path) -> ScoringState:
-    """Minimal valid ScoringState with one open, tracked sample."""
-    tracking: dict[str, TrackedSample] = {
-        SAMPLE_UUID: {
-            "status": STATUS_OPEN,
-            "updated_at": "2026-01-01T00:00:00Z",
-        }
-    }
+    """Minimal valid ScoringState with one open sample."""
     info = local_sample_info(SAMPLE_UUID, samples_dir)
     state: ScoringState = {
-        "mode": "single",
         "queue": [
             {
                 "uuid": SAMPLE_UUID,
                 "task_name": SAMPLE_TASK,
-                "sample_id": "s1",
                 "status": "open",
             }
         ],
@@ -100,8 +92,7 @@ def _build_state(samples_dir: Path) -> ScoringState:
         "cli_no_container": True,
         "attach": False,
         "setup_fn": lambda: None,
-        "tracking": tracking,
-        "tracking_touched": set(),
+        "skipped": set(),
         "include_skipped": False,
         "include_done": False,
         "all_tasks": [SAMPLE_TASK],
@@ -113,16 +104,14 @@ def _build_state(samples_dir: Path) -> ScoringState:
 def _make_client(state: ScoringState) -> FlaskClient:
     """Build a Flask test client over ``state`` with stub callbacks.
 
-    ``save_fn`` is the real :func:`scoring.__main__.save_state` so tracking
-    actually round-trips through ``ui_state.jsonl``; the rest are inert stubs
-    since no test drives queue navigation / container setup.
+    The callbacks are inert stubs since no test drives queue navigation /
+    container setup; routes write to ``history.jsonl`` directly via the store.
     """
     lock = threading.Lock()
     flask_app = app_module.create_app(
         state=state,
         lock=lock,
         advance_fn=lambda: "advanced",
-        save_fn=save_state,
         rebuild_queue_fn=lambda: None,
     )
     flask_app.config.update(TESTING=True)

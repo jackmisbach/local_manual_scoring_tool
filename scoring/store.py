@@ -2,26 +2,25 @@
 
 Two JSONL files live at the samples root:
 
-- ``ui_state.jsonl`` — one line per sample, keyed by sample ``id`` (the sample
+- ``history.jsonl`` — one line per sample, keyed by sample ``id`` (the sample
   dir name). A record holds the sample's working/UI state (``history``,
-  ``stash``, ``finish_events``, ``scratchpad``, ``timers``) plus an optional
+  ``stash``, ``finished_at``, ``scratchpad``, ``timers``) plus an optional
   ``skipped`` flag. Everything else about a sample's status is *derived* from
   this content (see :func:`derive_queue_status`), not stored — a sample the user
   hasn't touched has no record at all. Updates are read-modify-rewrite under a
   module lock.
 
-- ``scores.jsonl`` — append-only canonical export. One flat line per finalized
-  score submission (``id``, ``scorer``, ``value``, ``explanation``,
-  ``minutes_to_score``, ``scored_at``, ``task_name``).
-
-A third small file, ``.task_scratchpads.json``, keeps reusable per-task notes
-(keyed by task name), seeded into a sample's scratch pad when you open it.
+- ``scores.jsonl`` — canonical flat export, generated on demand (overwritten)
+  from ``history.jsonl`` history by ``local-manual-score export`` (see
+  :mod:`scoring.export`). One flat line per finalized score (``id``, ``scorer``,
+  ``value``, ``explanation``, ``minutes_to_score``, ``scored_at``,
+  ``task_name``). It is never read by the tool and is not written on submit.
 
 Status taxonomy (a derived queue-entry value — only ``skipped`` is persisted):
 
 - ``open`` — sample has no saved scoring content yet.
 - ``scored`` — at least one history entry exists.
-- ``done`` — user clicked "Done Scoring This Sample" (a finish event exists).
+- ``done`` — user clicked "Done Scoring This Sample" (``finished_at`` is set).
 - ``skipped`` — user actively skipped; the lone persisted flag, surfaced only
   while the sample has no history/finish of its own.
 """
@@ -35,9 +34,9 @@ from typing import Any, Literal, NotRequired, TypedDict, cast
 
 logger = logging.getLogger(__name__)
 
-UI_STATE_FILENAME = "ui_state.jsonl"
+HISTORY_FILENAME = "history.jsonl"
+LEGACY_HISTORY_FILENAME = "ui_state.jsonl"
 SCORES_FILENAME = "scores.jsonl"
-TASK_SCRATCHPADS_FILENAME = ".task_scratchpads.json"
 
 Status = Literal["open", "skipped", "scored", "done"]
 
@@ -91,13 +90,6 @@ class SavedScore(TypedDict, total=False):
     saved_at: NotRequired[str]
 
 
-class FinishRecord(TypedDict, total=False):
-    """One "done scoring" record for a sample."""
-
-    author: str
-    sent_at: str
-
-
 class TimerSnapshot(TypedDict, total=False):
     """Last known state of one stopwatch timer."""
 
@@ -111,31 +103,29 @@ class TimerState(TypedDict, total=False):
 
 
 class ScoreFile(TypedDict):
-    """The working/UI subset of a ``ui_state.jsonl`` record.
+    """The working/UI subset of a ``history.jsonl`` record.
 
     Named ``ScoreFile`` for continuity with the call sites that consume it:
     - ``stash`` (optional): a single in-progress draft.
     - ``history``: append-only list of finalized scoring events.
-    - ``finish_events`` (optional): "Done Scoring This Sample" records.
+    - ``finished_at`` (optional): ISO timestamp the user clicked "Done Scoring".
     - ``scratchpad`` (optional): free-form notes for the sample.
     - ``timers`` (optional): persisted stopwatch state.
     """
 
     stash: NotRequired[SavedScore]
     history: list[SavedScore]
-    finish_events: NotRequired[list[FinishRecord]]
+    finished_at: NotRequired[str]
     scratchpad: NotRequired[str]
     timers: NotRequired[TimerState]
 
 
 # Keys of a record that belong to the ScoreFile (working/UI) view.
-_SCORE_KEYS: frozenset[str] = frozenset(
-    {"history", "stash", "finish_events", "scratchpad", "timers"}
-)
+_SCORE_KEYS: frozenset[str] = frozenset({"history", "stash", "finished_at", "scratchpad", "timers"})
 
 # Every key persisted in a record besides ``id``: the working/UI score view plus
 # the lone ``skipped`` tracking flag. Anything else (e.g. legacy
-# status/updated_at/stashed/eval_set_id from older formats) is dropped the first
+# status/updated_at/stashed from older formats) is dropped the first
 # time a record is rewritten.
 _RECORD_KEYS: frozenset[str] = _SCORE_KEYS | {"skipped"}
 
@@ -145,17 +135,38 @@ def now_iso() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Record I/O (ui_state.jsonl)
+# Record I/O (history.jsonl)
 # ---------------------------------------------------------------------------
 
-# Serializes the read-modify-rewrite on ui_state.jsonl so concurrent writers
+# Serializes the read-modify-rewrite on history.jsonl so concurrent writers
 # (the background setup thread, timer-state autosaves, the submit handler)
 # can't clobber each other.
 _records_lock = threading.RLock()
 
 
-def ui_state_path(root: Path) -> Path:
-    return root / UI_STATE_FILENAME
+def history_path(root: Path) -> Path:
+    return root / HISTORY_FILENAME
+
+
+def migrate_legacy_history_file(root: Path) -> None:
+    """Rename a legacy ``ui_state.jsonl`` to the current ``history.jsonl``.
+
+    The per-sample working/UI state file was once named ``ui_state.jsonl``; it is
+    now ``history.jsonl``. This in-place rename keeps existing local data from
+    being orphaned by the rename.
+
+    Idempotent and safe to call when neither, either, or both files exist: it
+    acts only when the new file is absent *and* the legacy file is present, so a
+    second call (or a fresh install) is a no-op. Must be called once at a
+    single-threaded startup point, before any threads or Flask start — never
+    from inside the records lock, where a rename could race concurrent writes.
+    """
+    new_path = history_path(root)
+    legacy_path = root / LEGACY_HISTORY_FILENAME
+    if new_path.exists() or not legacy_path.exists():
+        return
+    legacy_path.rename(new_path)
+    logger.info("Migrated legacy %s -> %s", legacy_path.name, new_path.name)
 
 
 def scores_path(root: Path) -> Path:
@@ -163,18 +174,18 @@ def scores_path(root: Path) -> Path:
 
 
 def _load_records(root: Path) -> dict[str, dict[str, Any]]:
-    """Read ``ui_state.jsonl`` into ``{id: record}``; ``{}`` if missing.
+    """Read ``history.jsonl`` into ``{id: record}``; ``{}`` if missing.
 
     Malformed lines are skipped (with a warning) rather than aborting the load,
     so a single bad hand-edit can't take down the scoring page.
     """
-    path = ui_state_path(root)
+    path = history_path(root)
     if not path.exists():
         return {}
     records: dict[str, dict[str, Any]] = {}
     with path.open(encoding="utf-8") as f:
-        for lineno, line in enumerate(f, start=1):
-            line = line.strip()
+        for lineno, raw in enumerate(f, start=1):
+            line = raw.strip()
             if not line:
                 continue
             try:
@@ -190,135 +201,99 @@ def _load_records(root: Path) -> dict[str, dict[str, Any]]:
 
 
 def _write_records(root: Path, records: dict[str, dict[str, Any]]) -> None:
-    """Rewrite ``ui_state.jsonl`` from ``{id: record}``, one line per sample."""
-    path = ui_state_path(root)
+    """Rewrite ``history.jsonl`` from ``{id: record}``, one line per sample.
+
+    Only ``id`` plus recognized keys (:data:`_RECORD_KEYS`) are written, so
+    legacy tracking fields from older formats are dropped on the next rewrite. A
+    record left with nothing but ``id`` is omitted entirely.
+    """
+    path = history_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         for sample_id in sorted(records):
-            rec = dict(records[sample_id])
-            rec["id"] = sample_id
+            src = records[sample_id]
+            rec: dict[str, Any] = {"id": sample_id}
+            for key in _RECORD_KEYS:
+                if key in src:
+                    rec[key] = src[key]
+            if len(rec) == 1:  # only ``id`` — nothing worth persisting
+                continue
             f.write(json.dumps(rec, sort_keys=True))
             f.write("\n")
 
 
+def iter_score_files(root: Path) -> list[tuple[str, ScoreFile]]:
+    """Return ``(sample_id, ScoreFile)`` for every record with score/UI content.
+
+    A public, read-only view over ``history.jsonl`` for callers (e.g. the
+    ``scores.jsonl`` export) that need to walk every sample's working state.
+    Skip-only records (no history/stash/etc.) are omitted, since they carry no
+    score content. Ordering follows :func:`_load_records` (file order).
+    """
+    out: list[tuple[str, ScoreFile]] = []
+    for sample_id, rec in _load_records(root).items():
+        if not any(k in rec for k in _SCORE_KEYS):
+            continue
+        raw: dict[str, Any] = {k: rec[k] for k in _SCORE_KEYS if k in rec}
+        if not isinstance(raw.get("history"), list):
+            raw["history"] = []
+        out.append((sample_id, cast(ScoreFile, raw)))
+    return out
+
+
 def _ensure_record(records: dict[str, dict[str, Any]], sample_id: str) -> dict[str, Any]:
-    """Return the record for ``sample_id``, seeding an ``open`` tracking row."""
+    """Return the record for ``sample_id``, seeding an empty one if absent."""
     rec = records.get(sample_id)
     if rec is None:
-        rec = {"id": sample_id, "status": STATUS_OPEN, "updated_at": now_iso()}
+        rec = {"id": sample_id}
         records[sample_id] = rec
     return rec
 
 
 # ---------------------------------------------------------------------------
-# Tracking view
+# Skip flag (the one persisted tracking bit)
 # ---------------------------------------------------------------------------
 
 
-def load_tracking(root: Path) -> dict[str, TrackedSample]:
-    """Return ``{id: TrackedSample}`` from the store."""
-    out: dict[str, TrackedSample] = {}
-    for sample_id, rec in _load_records(root).items():
-        entry: TrackedSample = {
-            "status": cast(Status, rec.get("status", STATUS_OPEN)),
-            "updated_at": rec.get("updated_at", "") or "",
-        }
-        if rec.get("stashed"):
-            entry["stashed"] = True
-        out[sample_id] = entry
-    return out
+def load_skipped(root: Path) -> set[str]:
+    """Return the set of sample ids the user has skipped."""
+    return {sample_id for sample_id, rec in _load_records(root).items() if rec.get("skipped")}
 
 
-def save_tracking(
-    root: Path,
-    tracking: dict[str, TrackedSample],
-    touched_uuids: Iterable[str],
-) -> None:
-    """Persist the tracking fields of ``touched_uuids`` into ``ui_state.jsonl``.
-
-    Re-reads the file, overlays the tracking subset for the listed ids
-    (preserving each record's score/UI fields), and writes back. Records this
-    process didn't touch survive untouched.
-    """
+def set_skipped(root: Path, uuid: str, skipped: bool = True) -> None:
+    """Set (or clear) the persisted ``skipped`` flag on a sample's record."""
     with _records_lock:
         records = _load_records(root)
-        for sample_id in touched_uuids:
-            entry = tracking.get(sample_id)
-            if entry is None:
-                continue
-            rec = _ensure_record(records, sample_id)
-            rec["status"] = entry["status"]
-            rec["updated_at"] = entry.get("updated_at", "") or now_iso()
-            if entry.get("stashed"):
-                rec["stashed"] = True
-            else:
-                rec.pop("stashed", None)
+        rec = _ensure_record(records, uuid)
+        if skipped:
+            rec["skipped"] = True
+        else:
+            rec.pop("skipped", None)
         _write_records(root, records)
 
 
-def set_status(
-    tracking: dict[str, TrackedSample],
-    uuid: str,
-    status: Status,
-    *,
-    touched: set[str] | None = None,
-) -> None:
-    """Upsert an in-memory tracking entry, preserving the ``stashed`` flag."""
-    existing = tracking.get(uuid)
-    entry: TrackedSample = {
-        "status": status,
-        "updated_at": now_iso(),
-    }
-    if existing is not None and existing.get("stashed"):
-        entry["stashed"] = True
-    tracking[uuid] = entry
-    if touched is not None:
-        touched.add(uuid)
+def last_activity_map(root: Path) -> dict[str, str]:
+    """Map sample id -> latest activity ISO timestamp across its saved content.
 
-
-def set_stashed(
-    tracking: dict[str, TrackedSample],
-    uuid: str,
-    stashed: bool,
-    *,
-    touched: set[str] | None = None,
-) -> None:
-    """Flip the in-memory ``stashed`` flag without changing the status."""
-    if uuid not in tracking:
-        tracking[uuid] = {
-            "status": STATUS_OPEN,
-            "updated_at": now_iso(),
-        }
-    entry: TrackedSample = dict(tracking[uuid])  # type: ignore[typeddict-item]
-    entry["updated_at"] = now_iso()
-    if stashed:
-        entry["stashed"] = True
-    else:
-        entry.pop("stashed", None)
-    tracking[uuid] = entry
-    if touched is not None:
-        touched.add(uuid)
-
-
-def ensure_tracking_entries(
-    tracking: dict[str, TrackedSample],
-    uuids: Iterable[str],
-    *,
-    touched: set[str] | None = None,
-) -> int:
-    """Create ``open`` rows for any queue uuids missing from the in-memory map."""
-    added = 0
-    for uuid in uuids:
-        if uuid in tracking:
-            continue
-        tracking[uuid] = {
-            "status": STATUS_OPEN,
-            "updated_at": now_iso(),
-        }
-        added += 1
-        if touched is not None:
-            touched.add(uuid)
-    return added
+    The newest of any history ``saved_at``, the stash ``saved_at``, and the
+    ``finished_at`` timestamp; empty string for a record with no timestamped
+    content. Powers the summary page's "Updated" column without a persisted field.
+    """
+    out: dict[str, str] = {}
+    for sample_id, rec in _load_records(root).items():
+        stamps: list[str] = [
+            e["saved_at"]
+            for e in (rec.get("history") or [])
+            if isinstance(e, dict) and isinstance(e.get("saved_at"), str)
+        ]
+        stash = rec.get("stash")
+        if isinstance(stash, dict) and isinstance(stash.get("saved_at"), str):
+            stamps.append(stash["saved_at"])
+        finished_at = rec.get("finished_at")
+        if isinstance(finished_at, str):
+            stamps.append(finished_at)
+        out[sample_id] = max(stamps) if stamps else ""
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -329,8 +304,8 @@ def ensure_tracking_entries(
 def load_score_file(root: Path, uuid: str) -> ScoreFile | None:
     """Read the working/UI state for ``uuid``.
 
-    Returns ``None`` when the sample has no record, or only a bare tracking row
-    with no score/UI content.
+    Returns ``None`` when the sample has no record, or a record with no score/UI
+    content (e.g. a skip-only record).
     """
     rec = _load_records(root).get(uuid)
     if rec is None:
@@ -346,9 +321,8 @@ def load_score_file(root: Path, uuid: str) -> ScoreFile | None:
 def write_score_file(root: Path, uuid: str, score_file: ScoreFile) -> None:
     """Replace the score/UI portion of ``uuid``'s record with ``score_file``.
 
-    Tracking fields (status, updated_at, stashed) are preserved;
-    score keys absent from ``score_file`` are removed (so e.g. clearing the
-    stash drops it).
+    The ``skipped`` flag is preserved; score keys absent from ``score_file`` are
+    removed (so e.g. clearing the stash drops it).
     """
     with _records_lock:
         records = _load_records(root)
@@ -378,9 +352,7 @@ def clear_stash(root: Path, uuid: str) -> ScoreFile | None:
     return score_file
 
 
-def append_history(
-    root: Path, uuid: str, entry: SavedScore, *, drop_stash: bool = False
-) -> None:
+def append_history(root: Path, uuid: str, entry: SavedScore, *, drop_stash: bool = False) -> None:
     """Append a finalized scoring event to ``history``.
 
     Stamps ``saved_at``. ``drop_stash`` removes the in-progress draft as part of
@@ -394,20 +366,17 @@ def append_history(
     write_score_file(root, uuid, score_file)
 
 
-def append_finish_event(root: Path, uuid: str, author: str) -> None:
-    """Record a "Done Scoring This Sample" event inside the sample's record."""
+def set_finished(root: Path, uuid: str) -> None:
+    """Mark the sample "Done Scoring" by stamping ``finished_at`` on its record."""
     score_file: ScoreFile = load_score_file(root, uuid) or {"history": []}
-    record: FinishRecord = {"author": author, "sent_at": now_iso()}
-    events = list(score_file.get("finish_events") or [])
-    events.append(record)
-    score_file["finish_events"] = events
+    score_file["finished_at"] = now_iso()
     write_score_file(root, uuid, score_file)
 
 
-def clear_finish_events(root: Path, uuid: str) -> None:
-    """Remove all finish events so the sample can be re-scored."""
+def clear_finished(root: Path, uuid: str) -> None:
+    """Drop the ``finished_at`` stamp so the sample can be re-scored."""
     score_file: ScoreFile = load_score_file(root, uuid) or {"history": []}
-    score_file.pop("finish_events", None)
+    score_file.pop("finished_at", None)
     write_score_file(root, uuid, score_file)
 
 
@@ -448,166 +417,30 @@ def save_timer_state(root: Path, uuid: str, state: TimerState | None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Canonical scores export (scores.jsonl)
+# Canonical scores export (scores.jsonl) — pure row building
 # ---------------------------------------------------------------------------
 
-_scores_lock = threading.Lock()
 
+def build_score_row(uuid: str, entry: SavedScore, task_name: str) -> dict[str, Any]:
+    """Build one flat ``scores.jsonl`` row from a history entry (no I/O).
 
-def append_score_jsonl(root: Path, uuid: str, entry: SavedScore, info: dict[str, Any]) -> Path:
-    """Append one flat finalized-score line to ``scores.jsonl``.
-
-    ``entry`` is the SavedScore just appended to history; ``info`` is the
-    sample's metadata (task_name). Returns the path written to.
+    ``entry`` is a SavedScore from a sample's history; ``task_name`` is joined in
+    by the caller (from the sample's ``sample.json``) so this module needs no
+    dependency on :mod:`scoring.state`. The row shape and field derivation match
+    the legacy live append: ``scorer`` prefers ``score.metadata.author`` over the
+    constant ``entry.scorer``, and ``scored_at`` falls back to the current time.
     """
     score = entry.get("score") or {}
     meta = score.get("metadata") or {}
-    row = {
+    return {
         "id": uuid,
         "scorer": meta.get("author") or entry.get("scorer") or "",
         "value": score.get("value"),
         "explanation": score.get("explanation", ""),
         "minutes_to_score": meta.get("minutes_spent_scoring"),
         "scored_at": meta.get("scored_at") or now_iso(),
-        "task_name": info.get("task_name", "") or "",
+        "task_name": task_name or "",
     }
-    path = scores_path(root)
-    with _scores_lock:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(row, sort_keys=True))
-            f.write("\n")
-    return path
-
-
-# ---------------------------------------------------------------------------
-# Reusable per-task scratch pads (.task_scratchpads.json)
-# ---------------------------------------------------------------------------
-
-
-class TaskScratchpadEntry(TypedDict):
-    """Reusable scratch-pad notes shared across all samples of one task."""
-
-    task: NotRequired[str]
-    variants: NotRequired[dict[str, str]]
-
-
-# task_name -> reusable notes.
-TaskScratchpads = dict[str, TaskScratchpadEntry]
-
-
-def task_scratchpads_path(root: Path) -> Path:
-    return root / TASK_SCRATCHPADS_FILENAME
-
-
-def clean_scratchpad_entry(entry: object) -> TaskScratchpadEntry | None:
-    """Coerce one raw store value into a TaskScratchpadEntry, or None if unusable."""
-    if not isinstance(entry, dict):
-        return None
-    clean: TaskScratchpadEntry = {}
-    task = entry.get("task")
-    if isinstance(task, str) and task:
-        clean["task"] = task
-    raw_variants = entry.get("variants")
-    if isinstance(raw_variants, dict):
-        variants = {
-            name: note
-            for name, note in raw_variants.items()
-            if isinstance(name, str) and isinstance(note, str) and note
-        }
-        if variants:
-            clean["variants"] = variants
-    return clean
-
-
-def load_task_scratchpads(root: Path) -> TaskScratchpads:
-    """Read the task/variant scratch-pad store, or ``{}`` if missing/unreadable."""
-    path = task_scratchpads_path(root)
-    if not path.exists():
-        return {}
-    try:
-        with path.open() as f:
-            raw = json.load(f)
-    except (OSError, json.JSONDecodeError) as e:
-        logger.warning("Ignoring %s: %s", path, e)
-        return {}
-    if not isinstance(raw, dict):
-        logger.warning("Ignoring %s: expected object, got %s", path, type(raw).__name__)
-        return {}
-    store: TaskScratchpads = {}
-    for task_name, entry in raw.items():
-        clean = clean_scratchpad_entry(entry)
-        if clean is None:
-            logger.warning("Ignoring malformed scratch-pad entry %r in %s", task_name, path)
-            continue
-        store[task_name] = clean
-    return store
-
-
-def write_task_scratchpads(root: Path, store: TaskScratchpads) -> None:
-    path = task_scratchpads_path(root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w") as f:
-        json.dump(store, f, indent=2, sort_keys=True)
-
-
-def load_task_scratchpad(root: Path, task_name: str) -> str:
-    """Return the generic task-level note, or "" if absent."""
-    if not task_name:
-        return ""
-    entry = load_task_scratchpads(root).get(task_name)
-    if entry is None:
-        return ""
-    return entry.get("task") or ""
-
-
-def load_variant_scratchpad(root: Path, task_name: str, variant: str) -> str:
-    """Return the variant-specific note, or "" if absent."""
-    if not task_name or not variant:
-        return ""
-    entry = load_task_scratchpads(root).get(task_name)
-    if entry is None:
-        return ""
-    return (entry.get("variants") or {}).get(variant) or ""
-
-
-def save_task_scratchpad(root: Path, task_name: str, content: str) -> None:
-    """Upsert (or clear) the generic task-level note."""
-    if not task_name:
-        raise ValueError("task_name is required to save a task scratchpad")
-    store = load_task_scratchpads(root)
-    entry = store.get(task_name, TaskScratchpadEntry())
-    if content:
-        entry["task"] = content
-    else:
-        entry.pop("task", None)
-    if entry.get("task") or entry.get("variants"):
-        store[task_name] = entry
-    else:
-        store.pop(task_name, None)
-    write_task_scratchpads(root, store)
-
-
-def save_variant_scratchpad(root: Path, task_name: str, variant: str, content: str) -> None:
-    """Upsert (or clear) a variant-specific note."""
-    if not task_name or not variant:
-        raise ValueError("task_name and variant are required to save a variant scratchpad")
-    store = load_task_scratchpads(root)
-    entry = store.get(task_name, TaskScratchpadEntry())
-    variants = entry.get("variants") or {}
-    if content:
-        variants[variant] = content
-    else:
-        variants.pop(variant, None)
-    if variants:
-        entry["variants"] = variants
-    else:
-        entry.pop("variants", None)
-    if entry.get("task") or entry.get("variants"):
-        store[task_name] = entry
-    else:
-        store.pop(task_name, None)
-    write_task_scratchpads(root, store)
 
 
 # ---------------------------------------------------------------------------
@@ -658,7 +491,7 @@ def most_invested_entry_for_scorer(score_file: ScoreFile, scorer: str) -> SavedS
     def key(e: SavedScore) -> tuple[float, str]:
         meta = (e.get("score") or {}).get("metadata") or {}
         raw = meta.get("minutes_spent_scoring")
-        minutes = float(raw) if isinstance(raw, (int, float)) and not isinstance(raw, bool) else 0.0
+        minutes = float(raw) if isinstance(raw, int | float) and not isinstance(raw, bool) else 0.0
         return minutes, e.get("saved_at", "")
 
     return max(own, key=key)
@@ -704,10 +537,11 @@ def queue_summary_fields(score_file: ScoreFile | None) -> dict[str, Any]:
 
 
 def derive_status_from_score_file(score_file: ScoreFile | None, fallback: Status) -> Status:
-    """Pick the tracking status implied by a score file's current contents.
+    """Status implied by a score file's contents, ignoring the skip flag.
 
     A sample is ``done`` once the user clicks Done Scoring, ``scored`` once any
     history entry exists, else the caller's ``fallback`` (typically ``open``).
+    The skip-aware wrapper is :func:`derive_queue_status`.
     """
     if score_file is None:
         return fallback
@@ -719,7 +553,29 @@ def derive_status_from_score_file(score_file: ScoreFile | None, fallback: Status
 
 
 def has_finish_event(score_file: ScoreFile | None) -> bool:
-    """True if the sample has at least one Done Scoring record."""
-    if score_file is None:
-        return False
-    return bool(score_file.get("finish_events"))
+    """True if the sample has been marked Done Scoring (``finished_at`` set)."""
+    return bool(score_file and score_file.get("finished_at"))
+
+
+def derive_queue_status(
+    score_file: ScoreFile | None,
+    *,
+    skipped: bool,
+    include_skipped: bool = False,
+    include_done: bool = False,
+) -> Status:
+    """The queue-entry status for a sample, from its score file + skip flag.
+
+    Precedence ``done`` > ``scored`` > ``skipped`` > ``open``. ``skipped`` is the
+    one persisted bit, and it surfaces only while the sample has no history or
+    finish of its own — skipping is a UI action on an otherwise-untouched sample,
+    so the flag never needs clearing once a real score lands. ``include_skipped``
+    / ``include_done`` re-surface those samples as navigable (``open`` /
+    ``scored``).
+    """
+    base = derive_status_from_score_file(score_file, STATUS_OPEN)
+    if base == STATUS_DONE and include_done:
+        base = STATUS_SCORED if (score_file and score_file.get("history")) else STATUS_OPEN
+    if base == STATUS_OPEN and skipped and not include_skipped:
+        return STATUS_SKIPPED
+    return base

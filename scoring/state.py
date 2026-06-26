@@ -1,13 +1,12 @@
 """Types for the scoring state shared between the CLI and the Flask app, plus
-per-sample metadata loading from each sample dir's ``sample.json``."""
+per-sample metadata loading from each sample dir's ``sample.json``.
+"""
 
 import json
 import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal, NotRequired, TypedDict, cast
-
-from scoring.store import TrackedSample
 
 AdvanceResult = Literal["advanced", "exhausted"]
 
@@ -37,7 +36,6 @@ class QueueEntry(TypedDict):
 
     uuid: str
     task_name: str
-    sample_id: str
     status: QueueStatus
     score: NotRequired[float]
     explanation: NotRequired[str]
@@ -67,7 +65,6 @@ class SampleInfo(TypedDict):
     banner and the image must be supplied via ``--image``.
     """
 
-    run_uuid: str
     task_name: str
     task_version: str
     task_variant: str
@@ -81,7 +78,6 @@ class SampleInfo(TypedDict):
 class ScoringState(TypedDict):
     """Shared mutable state owned by the CLI and read/written by the Flask app."""
 
-    mode: str
     queue: list[QueueEntry]
     current_idx: int
     uuid: str
@@ -102,10 +98,9 @@ class ScoringState(TypedDict):
     cli_no_container: bool
     attach: bool
     setup_fn: Callable[[], None]
-    tracking: dict[str, TrackedSample]
-    # UUIDs whose tracking row changed since the last save_tracking, so the
-    # save only rewrites rows this process actually touched.
-    tracking_touched: set[str]
+    # In-memory mirror of the persisted ``skipped`` flags, consulted when
+    # deriving a sample's queue status (see ``derive_queue_status``).
+    skipped: set[str]
     include_skipped: bool
     include_done: bool
     # Task universe for the Tasks… selection modal: every task name seen across
@@ -148,15 +143,14 @@ def sample_task_name(data: dict[str, Any]) -> str:
     return str(data.get("task") or data.get("task_name") or "")
 
 
-def _sample_info(data: dict[str, Any], uuid: str = "") -> SampleInfo:
+def _sample_info(data: dict[str, Any]) -> SampleInfo:
     """Build a :class:`SampleInfo` from a ``sample.json`` dict (``{}`` if none).
 
-    ``run_uuid`` is ``uuid`` — the sample dir name, which is the single canonical
-    identifier the whole tool keys on (queue, ``ui_state.jsonl``,
-    ``scores.jsonl``). Any ``run_uuid`` inside ``sample.json`` is ignored.
+    The sample's canonical identifier is its dir name (the ``uuid`` the whole
+    tool keys on), tracked separately on the queue/state — it is not a
+    ``SampleInfo`` field.
     """
     return {
-        "run_uuid": uuid,
         "task_name": sample_task_name(data),
         "task_version": str(data.get("task_version", "") or ""),
         "task_variant": str(data.get("task_variant") or data.get("variant") or ""),
@@ -171,12 +165,12 @@ def local_sample_info(uuid: str, samples_dir: Path) -> SampleInfo:
 
     Recognized ``sample.json`` keys: ``task`` (task name), ``image`` (the image
     tarball filename inside the images dir), and optionally ``task_variant`` /
-    ``project_dir``. The sample's ``run_uuid`` is the dir name, not a
+    ``project_dir``. The sample's identifier is the dir name (``uuid``), not a
     ``sample.json`` field. Scoring works even with no ``sample.json`` (the form
     only needs the project dir and the guidance links); ``no_metadata`` then
     drives an explanatory banner and the image must be supplied via ``--image``.
     """
-    return _sample_info(load_sample_json(samples_dir, uuid), uuid)
+    return _sample_info(load_sample_json(samples_dir, uuid))
 
 
 def stub_sample_info() -> SampleInfo:

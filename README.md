@@ -56,9 +56,8 @@ data/
 │   │   └── sample.json     # optional per-sample metadata (see below)
 │   ├── <uuid>/
 │   │   └── project/
-│   ├── scores.jsonl        # append-only finalized scores (output)
-│   ├── ui_state.jsonl      # per-sample working/UI state (output)
-│   └── .task_scratchpads.json
+│   ├── scores.jsonl        # flat finalized-score export (generated on demand)
+│   └── history.jsonl       # per-sample working/UI state incl. score history (output)
 └── images/
     └── <task>-<version>.tar  # docker save image archive(s)
 ```
@@ -74,7 +73,6 @@ without it, but you then must supply the image via `--image`.
 
 ```json
 {
-  "run_uuid": "...",
   "task": "<task name>",
   "image": "<image-tarball-filename>"
 }
@@ -134,13 +132,31 @@ one entry).
    - **Next Sample** advances to the next unscored sample.
    - **Skip** skips the current sample (re-surface later with `--include-skipped`).
    - **Done Scoring This Sample** marks it finished (re-surface with `--include-done`).
-4. Each finalized submission appends one line to `data/samples/scores.jsonl`.
-   Working state (drafts, timers, scratchpad, status) lives in
-   `data/samples/ui_state.jsonl`, so quitting and re-running resumes where you
-   left off.
+4. Every finalized submission is appended to the sample's score history in
+   `data/samples/history.jsonl`, alongside working state (drafts, timers,
+   scratchpad, status), so quitting and re-running resumes where you left off.
+   The flat `data/samples/scores.jsonl` export is **not** written on submit —
+   generate it on demand with `local-manual-score export` (see below).
 
 The tool is **blind-only**: the model name is never recorded or shown anywhere
 (there is no model field in `sample.json`, the queue, or `scores.jsonl`).
+
+## Exporting scores
+
+`scores.jsonl` is the canonical flat export (consumed downstream). It is **not**
+written on submit; it is rebuilt on demand from each sample's history in
+`history.jsonl`:
+
+```bash
+local-manual-score export [SAMPLES_DIR]
+```
+
+This (over)writes `<samples-dir>/scores.jsonl` — one flat line per finalized
+score across all samples (`id`, `scorer`, `value`, `explanation`,
+`minutes_to_score`, `scored_at`, `task_name`) — and prints the path and row
+count. `SAMPLES_DIR` resolves the same way as the main command (the optional
+positional arg, else the configured/`./data/samples` default). Re-running it is
+idempotent. No Docker or Flask is involved.
 
 ## GUI tasks (noVNC)
 

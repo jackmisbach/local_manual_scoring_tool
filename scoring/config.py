@@ -274,7 +274,7 @@ def resolve_scorer(cli_value: str) -> str:
     saved = load_config().get("scorer_email")
     if saved:
         return saved
-    import getpass  # noqa: PLC0415 - only needed on first-run fallback
+    import getpass
 
     resolved = _git_user_email() or getpass.getuser() or "unknown"
     update_config(scorer_email=resolved)

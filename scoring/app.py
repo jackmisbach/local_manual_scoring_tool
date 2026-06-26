@@ -41,49 +41,41 @@ from scoring.infra import (
 )
 from scoring.state import (
     AdvanceResult,
-    SampleInfo,
     ScoringState,
     local_sample_info,
     next_pending_index,
 )
-from scoring.task_selection import load_selection, save_selection
 from scoring.store import (
     EXISTING_METADATA_DISPLAY,
-    STATUS_OPEN,
-    STATUS_SKIPPED,
     SavedScore,
     ScoreEventScore,
     ScoreFile,
     ScoreFormData,
     TimerState,
-    append_finish_event,
     append_history,
-    append_score_jsonl,
-    clear_finish_events,
+    clear_finished,
     clear_stash,
-    derive_status_from_score_file,
+    derive_queue_status,
     entries_equal_ignoring_saved_at,
     has_finish_event,
     has_history_for_scorer,
     history_for_scorer,
+    history_path,
+    last_activity_map,
     load_score_file,
     load_scratchpad,
-    load_task_scratchpad,
     load_timer_state,
-    load_variant_scratchpad,
     most_invested_entry_for_scorer,
     now_iso,
     queue_summary_fields,
     save_scratchpad,
     save_stash,
-    save_task_scratchpad,
     save_timer_state,
-    save_variant_scratchpad,
-    scores_path,
-    set_stashed,
-    set_status,
+    set_finished,
+    set_skipped,
     stash_matches_submission,
 )
+from scoring.task_selection import load_selection, save_selection
 
 
 def _validate_bounded_float(
@@ -238,23 +230,6 @@ def _saved_score_for_template(saved: SavedScore | None) -> dict[str, Any] | None
     return {**saved, **form}
 
 
-def _scratchpad_seed(samples_dir: Path, uuid: str, info: SampleInfo) -> str:
-    """Pick the scratch-pad text to pre-fill when opening a sample.
-
-    Precedence: the sample's own saved note wins; otherwise fall back to the
-    variant-specific note, then the generic task note, then empty. Task and
-    variant notes act as reusable templates seeded onto fresh samples without
-    overwriting per-sample work.
-    """
-    per_sample = load_scratchpad(samples_dir, uuid)
-    if per_sample:
-        return per_sample
-    variant = load_variant_scratchpad(samples_dir, info["task_name"], info["task_variant"])
-    if variant:
-        return variant
-    return load_task_scratchpad(samples_dir, info["task_name"])
-
-
 def _max_prior_minutes(
     score_file: ScoreFile | None,
     scorer_email: str | None,
@@ -311,7 +286,7 @@ def open_in_os_default(path: str) -> None:
     """Open ``path`` (a file or folder) with the OS default application."""
     system = platform.system()
     if system == "Windows":
-        os.startfile(path)
+        os.startfile(path)  # pyright: ignore[reportAttributeAccessIssue]
     elif system == "Darwin":
         subprocess.Popen(["open", path])
     else:
@@ -322,7 +297,6 @@ def create_app(
     state: ScoringState,
     lock: threading.Lock,
     advance_fn: Callable[[], AdvanceResult],
-    save_fn: Callable[[ScoringState], None],
     rebuild_queue_fn: Callable[[], None],
 ) -> Flask:
     app = Flask(__name__)
@@ -330,19 +304,18 @@ def create_app(
     md.core.ruler.push("heading_anchors", apply_heading_anchors)
 
     def _markdown_filter(text: str | None) -> Markup:
-        return Markup(md.render(text or ""))  # noqa: S704
+        return Markup(md.render(text or ""))
 
     app.jinja_env.filters["markdown"] = _markdown_filter
 
     @app.before_request
     def block_writes_during_exit() -> tuple[Response, int] | None:
-        # Once exit_app has fired, any further write goes uncommitted
-        # because sync_push has already staged the disk state. Block
-        # mutating requests so the daemon thread's commit window can't
-        # race with browser POSTs (timer-state sendBeacons on pagehide,
-        # in-flight scratchpad saves, etc.). Read-only routes still
-        # serve normally — the page can still poll status until the
-        # process dies.
+        # Once exit_app has fired, the process is about to die. Block
+        # mutating requests so a late write (timer-state sendBeacons on
+        # pagehide, in-flight scratchpad saves, etc.) can't land
+        # half-written while the daemon exit thread tears the process
+        # down. Read-only routes still serve so the page can poll until
+        # the process dies.
         if request.method in ("GET", "HEAD", "OPTIONS"):
             return None
         if not request.path.startswith("/api/"):
@@ -363,11 +336,9 @@ def create_app(
             container_name = state["container_name"]
             queue = list(state["queue"])
             current_idx = state["current_idx"]
-            mode = state["mode"]
             setup_status_now = state["setup_state"].get("status", "idle")
             attach = state["attach"]
             cli_no_container = state["cli_no_container"]
-            tracking_entry = state["tracking"].get(uuid, {})
             samples_dir = state["samples_dir"]
             scorer_email = state["scorer_email"]
 
@@ -376,28 +347,22 @@ def create_app(
             # (a config mutation) gets included in the banner shown on the
             # subsequent scoring-page render.
             return render_template("task_selection.html", standalone=True)
-        # Empty queue in queue/hawkless mode means "nothing to score" — for
-        # example after the user deselects every task with pending samples,
-        # or when the selected tasks contain only samples that aren't set up
-        # for manual scoring. /summary renders that state clearly and runs
-        # its own drain. pending_summary covers the startup case where the
-        # whole eval set was already processed; cleared by /api/navigate
-        # once the user picks a row to open.
-        if mode == "queue" and (not queue or pending_summary):
+        # An empty queue means "nothing to score" — for example after the user
+        # deselects every task with pending samples, or when the selected tasks
+        # contain only samples that aren't set up for manual scoring. /summary
+        # renders that state clearly and runs its own drain. pending_summary
+        # covers the startup case where the whole eval set was already
+        # processed; cleared by /api/navigate once the user picks a row to open.
+        if not queue or pending_summary:
             return redirect("/summary")
-        # Pre-fill the form from the on-disk score file when the tracking
-        # status indicates the user previously saved something for this
-        # sample. Stash takes priority over history so an in-progress draft
-        # isn't masked by a previously-submitted entry. Falling back to the
-        # current scorer's most-invested submission (max
-        # ``minutes_spent_scoring``) means a quick revision after a
-        # thorough first pass doesn't eclipse the original work — Reload
-        # lands the user back on the entry they spent the most time on.
-        local_status = tracking_entry.get("status")
-        has_tracked_stash = bool(tracking_entry.get("stashed"))
-        score_file = None
-        if local_status not in (None, "", STATUS_OPEN) or has_tracked_stash:
-            score_file = load_score_file(samples_dir, uuid)
+        # Pre-fill the form from the on-disk score file. Stash takes
+        # priority over history so an in-progress draft isn't masked by a
+        # previously-submitted entry. Falling back to the current scorer's
+        # most-invested submission (max ``minutes_spent_scoring``) means a
+        # quick revision after a thorough first pass doesn't eclipse the
+        # original work — Reload lands the user back on the entry they spent
+        # the most time on.
+        score_file = load_score_file(samples_dir, uuid)
         # Two separate pre-fill sources so the UI can offer both Restore
         # (stash → form) and Reload (most-invested history → form)
         # independently. The client picks stash-first for the initial
@@ -441,9 +406,8 @@ def create_app(
             queue_done=queue_done,
             queue_skipped=queue_skipped,
             queue_total=scorable_total,
-            show_queue_progress=mode == "queue" and len(queue) > 1,
+            show_queue_progress=len(queue) > 1,
             current_idx=current_idx,
-            mode=mode,
             initial_section=initial_section,
             general_guidance_url=general_guidance_url(),
             task_guidance_url=task_guidance_url(info["task_name"]),
@@ -457,11 +421,7 @@ def create_app(
             prior_max_minutes=prior_max_minutes,
             clear_on_submit=clear_on_submit_mode(),
             pause_timer_hotkey=pause_timer_hotkey(),
-            scratchpad_content=_scratchpad_seed(samples_dir, uuid, info),
-            task_scratchpad_content=load_task_scratchpad(samples_dir, info["task_name"]),
-            variant_scratchpad_content=load_variant_scratchpad(
-                samples_dir, info["task_name"], info["task_variant"]
-            ),
+            scratchpad_content=load_scratchpad(samples_dir, uuid),
             timer_state=load_timer_state(samples_dir, uuid) or {},
             scorer_email=scorer_email,
             existing_metadata_display=list(EXISTING_METADATA_DISPLAY),
@@ -549,12 +509,11 @@ def create_app(
             result = dict(state["setup_state"])
             container_name = state["container_name"]
             queue = list(state["queue"])
-            if state["mode"] == "queue":
-                result["queue"] = {
-                    "current": state["current_idx"] + 1,
-                    "total": len(queue),
-                    "done": sum(1 for s in queue if s["status"] in ("done", "skipped")),
-                }
+            result["queue"] = {
+                "current": state["current_idx"] + 1,
+                "total": len(queue),
+                "done": sum(1 for s in queue if s["status"] in ("done", "skipped")),
+            }
         running = list_running_scoring_containers()
         result["container_exists"] = container_name in running
         prefix = "manual-score-"
@@ -593,88 +552,37 @@ def create_app(
         result["other_containers"] = others
         return jsonify(result)
 
-    def teardown_current_container() -> None:
-        with lock:
-            cn = state["container_name"]
-            state["no_container"] = True
-            state["setup_state"] = {"status": "idle"}
-        threading.Thread(target=stop_container, args=(cn,), daemon=True).start()
+    def sync_sample_state(uuid: str) -> None:
+        """Re-derive the in-memory queue entry for ``uuid`` from disk.
 
-    def sync_sample_state(
-        uuid: str,
-        *,
-        status_override: str | None = None,
-        preserve_skipped: bool = False,
-    ) -> None:
-        """Re-derive tracking + queue state for ``uuid`` from disk.
+        Called by every route that changes a sample's saved content (submit,
+        stash, drop-stash, finish, reopen). Reads the sample's score file once
+        and updates the matching queue entry's status and summary columns
+        (score / explanation / minutes / ``has_stash``).
 
-        Single sync path called by every route that changes a sample's
-        state: submit, stash, drop-stash, and skip. Reads the current score
-        file once and writes the implied state to both the tracking row
-        (status + ``stashed``) and the in-memory queue entry (status +
-        ``has_stash`` + summary columns). Caller must hold ``lock`` and run
-        ``save_fn`` afterward.
-
-        Without ``status_override`` the status is derived from the file by
-        :func:`derive_status_from_score_file` (``done`` > ``scored`` >
-        ``open``).
-
-        ``status_override`` is the skip path — the sample's disk state
-        hasn't changed, but the user explicitly set a status. In that mode
-        we only touch the flags this tool owns (status + ``stashed``) and
-        leave the queue entry's score summary columns alone.
-
-        ``preserve_skipped`` keeps an existing ``skipped`` status intact
-        when the derived status would otherwise demote it to ``open``.
-        Stash / drop-stash pass True: drafting (or discarding) a draft on
-        a skipped sample doesn't imply un-skipping. Submit leaves it False
-        because committing a real score is a deliberate re-entry into the
-        scoring set.
+        Status comes from :func:`derive_queue_status` over the score file and
+        the sample's skip flag, so a real score (history/finish) takes
+        precedence and skip / submit / stash never need to touch each other.
+        Caller must hold ``lock``.
         """
         samples_dir = state["samples_dir"]
         score_file = load_score_file(samples_dir, uuid)
-        has_stash = score_file is not None and score_file.get("stash") is not None
-
-        if status_override is None:
-            # Fallback is OPEN: derive_status_from_score_file handles every
-            # post-action state itself (scored/done), so reaching the fallback
-            # means there's nothing meaningful on disk (e.g. stash-only with
-            # empty history).
-            new_status: str = derive_status_from_score_file(score_file, STATUS_OPEN)
-            if (
-                preserve_skipped
-                and new_status == STATUS_OPEN
-                and state["tracking"].get(uuid, {}).get("status") == STATUS_SKIPPED
-            ):
-                new_status = STATUS_SKIPPED
-        else:
-            new_status = status_override
-
-        touched = state["tracking_touched"]
-        set_status(state["tracking"], uuid, new_status, touched=touched)  # type: ignore[arg-type]
-        set_stashed(state["tracking"], uuid, has_stash, touched=touched)
-
+        status = derive_queue_status(
+            score_file,
+            skipped=uuid in state["skipped"],
+            include_skipped=state["include_skipped"],
+            include_done=state["include_done"],
+        )
+        summary = queue_summary_fields(score_file)
         for entry in state["queue"]:
             if entry["uuid"] != uuid:
                 continue
-            entry["status"] = new_status  # type: ignore[typeddict-item]
-            if status_override is None:
-                summary = queue_summary_fields(score_file)
-                for key in (
-                    "score",
-                    "explanation",
-                    "minutes_to_score",
-                    "has_stash",
-                ):
-                    if key in summary:
-                        entry[key] = summary[key]  # type: ignore[literal-required]
-                    else:
-                        entry.pop(key, None)  # type: ignore[misc]
-            else:
-                if has_stash:
-                    entry["has_stash"] = True
+            entry["status"] = status
+            for key in ("score", "explanation", "minutes_to_score", "has_stash"):
+                if key in summary:
+                    entry[key] = summary[key]  # type: ignore[literal-required]
                 else:
-                    entry.pop("has_stash", None)
+                    entry.pop(key, None)  # type: ignore[misc]
             break
 
     @app.route("/api/submit-score", methods=["POST"])
@@ -687,18 +595,17 @@ def create_app(
             return err
         # require_complete=True guarantees value and explanation are present,
         # so the ScoreEvent payload built below has both.
-        assert "value" in form, (
-            "_parse_score_payload(require_complete=True) did not produce a complete form"
-        )
-        assert "explanation" in form, (
-            "_parse_score_payload(require_complete=True) did not produce a complete form"
-        )
+        assert (
+            "value" in form
+        ), "_parse_score_payload(require_complete=True) did not produce a complete form"
+        assert (
+            "explanation" in form
+        ), "_parse_score_payload(require_complete=True) did not produce a complete form"
 
         with lock:
             uuid = state["uuid"]
             samples_dir = state["samples_dir"]
             scorer_email = state["scorer_email"]
-            info = dict(state["info"])
 
         entry = _form_to_score_event(
             form,
@@ -722,8 +629,8 @@ def create_app(
         # keep the draft so iteration isn't lost.
         stash_dropped = stash_matches_submission((existing or {}).get("stash"), entry)
         append_history(samples_dir, uuid, entry, drop_stash=stash_dropped)
-        # Append the canonical flat record to scores.jsonl.
-        append_score_jsonl(samples_dir, uuid, entry, info)
+        # No scores.jsonl write here: it's a generated export, rebuilt on demand
+        # from this history by ``local-manual-score export`` (see scoring.export).
 
         # Recompute prior_max_minutes including the entry we just appended so
         # the client can warn on the next submission if its minutes drop below.
@@ -732,7 +639,6 @@ def create_app(
         has_next = False
         with lock:
             sync_sample_state(uuid)
-            save_fn(state)
             has_next = next_pending_index(state["queue"], state["current_idx"]) is not None
             queue_done = sum(1 for s in state["queue"] if s["status"] == "done")
             queue_skipped = sum(1 for s in state["queue"] if s["status"] == "skipped")
@@ -741,7 +647,7 @@ def create_app(
             success=True,
             has_next=has_next,
             saved_entry=_saved_score_for_template(entry),
-            score_path=str(scores_path(samples_dir)),
+            score_path=str(history_path(samples_dir)),
             queue_done=queue_done,
             queue_skipped=queue_skipped,
             queue_total=scorable_total,
@@ -759,23 +665,20 @@ def create_app(
         with lock:
             uuid = state["uuid"]
             samples_dir = state["samples_dir"]
-            scorer_email = state["scorer_email"]
-        append_finish_event(samples_dir, uuid, scorer_email)
+        set_finished(samples_dir, uuid)
         with lock:
             sync_sample_state(uuid)
-            save_fn(state)
         return jsonify(success=True)
 
     @app.route("/api/reopen", methods=["POST"])
     def reopen_sample() -> ResponseReturnValue:
-        """Clear finish events so the sample can be re-scored."""
+        """Clear the finished mark so the sample can be re-scored."""
         with lock:
             uuid = state["uuid"]
             samples_dir = state["samples_dir"]
-        clear_finish_events(samples_dir, uuid)
+        clear_finished(samples_dir, uuid)
         with lock:
             sync_sample_state(uuid)
-            save_fn(state)
         return jsonify(success=True)
 
     @app.route("/api/scores", methods=["GET"])
@@ -797,13 +700,12 @@ def create_app(
             scorer_email = state["scorer_email"]
         score_file = load_score_file(samples_dir, uuid)
         entries = history_for_scorer(score_file, scorer_email)
-        finish_events = (score_file or {}).get("finish_events") or []
         return jsonify(
             success=True,
             uuid=uuid,
             scorer_email=scorer_email,
             entries=[_saved_score_for_template(e) for e in entries],
-            finish_events=list(finish_events),
+            finished_at=(score_file or {}).get("finished_at"),
         )
 
     def advance_response() -> ResponseReturnValue:
@@ -815,18 +717,18 @@ def create_app(
 
     @app.route("/api/next", methods=["POST"])
     def next_sample() -> ResponseReturnValue:
-        if state["mode"] != "queue":
-            return jsonify(success=False, error="Not in queue mode"), 400
         return advance_response()
 
     @app.route("/api/skip", methods=["POST"])
     def skip_sample() -> ResponseReturnValue:
-        if state["mode"] != "queue":
-            return jsonify(success=False, error="Not in queue mode"), 400
         with lock:
             uuid = state["queue"][state["current_idx"]]["uuid"]
-            sync_sample_state(uuid, status_override=STATUS_SKIPPED)
-            save_fn(state)
+            samples_dir = state["samples_dir"]
+            # Persist the skip flag and mirror it in memory; the derived status
+            # then reads as ``skipped`` (it has no history/finish of its own).
+            state["skipped"].add(uuid)
+            set_skipped(samples_dir, uuid)
+            sync_sample_state(uuid)
         return advance_response()
 
     @app.route("/api/stash", methods=["POST"])
@@ -851,10 +753,9 @@ def create_app(
         )
         with lock:
             save_stash(samples_dir, uuid, draft)
-            sync_sample_state(uuid, preserve_skipped=True)
-            save_fn(state)
+            sync_sample_state(uuid)
 
-        return jsonify(success=True, score_path=str(scores_path(samples_dir)))
+        return jsonify(success=True, score_path=str(history_path(samples_dir)))
 
     @app.route("/api/scratchpad", methods=["POST"])
     def save_scratchpad_route() -> ResponseReturnValue:
@@ -872,47 +773,6 @@ def create_app(
             uuid = state["uuid"]
             samples_dir = state["samples_dir"]
         save_scratchpad(samples_dir, uuid, content)
-        return jsonify(success=True)
-
-    @app.route("/api/scratchpad/task", methods=["POST"])
-    def save_task_scratchpad_route() -> ResponseReturnValue:
-        """Promote the scratch pad to a reusable note for the whole task.
-
-        Stored outside the sample's record in a gitignored dotfile so it
-        seeds every sample of this task (see ``_scratchpad_seed``). UI-only.
-        Overwrites silently.
-        """
-        data = request.get_json()
-        if not isinstance(data, dict) or "content" not in data:
-            return jsonify(success=False, error="Missing content"), 400
-        content = str(data["content"])
-        with lock:
-            samples_dir = state["samples_dir"]
-            task_name = state["info"]["task_name"]
-        if not task_name:
-            return jsonify(success=False, error="Sample has no task name"), 400
-        save_task_scratchpad(samples_dir, task_name, content)
-        return jsonify(success=True)
-
-    @app.route("/api/scratchpad/variant", methods=["POST"])
-    def save_variant_scratchpad_route() -> ResponseReturnValue:
-        """Promote the scratch pad to a note for this task variant only.
-
-        More granular than the task-level note: it seeds only samples whose
-        variant matches (the generic task note covers the rest). Stored in the
-        same gitignored dotfile, UI-only, overwrites silently.
-        """
-        data = request.get_json()
-        if not isinstance(data, dict) or "content" not in data:
-            return jsonify(success=False, error="Missing content"), 400
-        content = str(data["content"])
-        with lock:
-            samples_dir = state["samples_dir"]
-            task_name = state["info"]["task_name"]
-            variant = state["info"]["task_variant"]
-        if not task_name or not variant:
-            return jsonify(success=False, error="Sample has no task variant"), 400
-        save_variant_scratchpad(samples_dir, task_name, variant, content)
         return jsonify(success=True)
 
     @app.route("/api/timer-state", methods=["POST"])
@@ -946,31 +806,28 @@ def create_app(
     def drop_stash() -> ResponseReturnValue:
         # Drop the in-progress draft without touching history. The form values
         # stay in the browser so the user can keep editing or just walk away;
-        # the row stays in tracking (every queue uuid has a row now) and the
-        # status falls back to whatever the remaining history implies.
+        # the queue entry's status falls back to whatever the remaining history
+        # (or skip flag) implies.
         with lock:
             uuid = state["uuid"]
             samples_dir = state["samples_dir"]
             clear_stash(samples_dir, uuid)
-            sync_sample_state(uuid, preserve_skipped=True)
-            save_fn(state)
+            sync_sample_state(uuid)
         return jsonify(success=True)
 
     @app.route("/summary")
     def summary() -> ResponseReturnValue:
         with lock:
             queue = list(state["queue"])
-            mode = state["mode"]
             current_idx = state["current_idx"]
-            tracking = dict(state["tracking"])
+            samples_dir = state["samples_dir"]
             pending_summary = state.get("pending_summary", False)
-        updated_at = {uuid: entry.get("updated_at", "") for uuid, entry in tracking.items()}
+        updated_at = last_activity_map(samples_dir)
         return render_template(
             "summary.html",
             queue=queue,
-            mode=mode,
             current_idx=current_idx,
-            can_navigate=mode == "queue",
+            can_navigate=True,
             updated_at=updated_at,
             config_changes=drain_changes(),
             pending_summary=pending_summary,
@@ -978,8 +835,6 @@ def create_app(
 
     @app.route("/api/navigate", methods=["POST"])
     def navigate() -> ResponseReturnValue:
-        if state["mode"] != "queue":
-            return jsonify(success=False, error="Not in queue mode"), 400
         data = request.get_json()
         if not isinstance(data, dict):
             return jsonify(success=False, error="Invalid request"), 400
@@ -1020,7 +875,6 @@ def create_app(
             state["setup_state"] = {"status": "idle"}
             state["container_name"] = f"manual-score-{target_uuid[:12]}"
             state.pop("pending_summary", None)
-            save_fn(state)
 
         return jsonify(success=True)
 
@@ -1058,56 +912,59 @@ def create_app(
             return jsonify(success=True, url="http://localhost:6080/vnc.html")
         return jsonify(success=False, error="noVNC setup failed")
 
-    @app.route("/api/open-path", methods=["POST"])
-    def open_path() -> ResponseReturnValue:
-        """Open an arbitrary path inside ``samples_dir`` with the OS default app.
+    @app.route("/api/open", methods=["POST"])
+    def open_target() -> ResponseReturnValue:
+        """Open something with the OS default app, chosen by ``target``.
 
-        Powers the clickable file-path links the UI shows in status messages
-        (stash saved to ..., score saved locally to ..., etc.). Restricted to
-        paths under ``samples_dir`` so a stray POST can't launch arbitrary
-        files on disk.
+        Body ``{"target": "path"|"artifacts"|"config", "path": <str>}``:
+
+        - ``path`` — an arbitrary path, restricted to under ``samples_dir`` so a
+          stray POST can't launch arbitrary files on disk. Powers the clickable
+          file-path links the UI shows in status messages. ``path`` is required.
+        - ``artifacts`` — the current sample's dir (``samples_dir / uuid``).
+        - ``config`` — the per-user config file, via the OS default editor.
+
+        Note ``open-vscode`` stays its own route: it's a container attach via the
+        ``code`` CLI, a different mechanism entirely.
         """
         data = request.get_json()
-        if not isinstance(data, dict) or "path" not in data:
-            return jsonify(success=False, error="Missing path"), 400
-        with lock:
-            base = state["samples_dir"].resolve()
-        try:
-            target = Path(str(data["path"])).resolve()
-        except (OSError, ValueError) as e:
-            return jsonify(success=False, error=f"Bad path: {e}"), 400
-        try:
-            target.relative_to(base)
-        except ValueError:
-            return jsonify(success=False, error="Path is outside artifacts dir"), 400
-        if not target.exists():
-            return jsonify(success=False, error="Path does not exist"), 404
-        open_in_os_default(str(target))
-        return jsonify(success=True)
+        if not isinstance(data, dict):
+            return jsonify(success=False, error="Invalid request"), 400
+        target = data.get("target")
 
-    @app.route("/api/open-artifacts", methods=["POST"])
-    def open_artifacts() -> ResponseReturnValue:
-        with lock:
-            path = state["samples_dir"] / state["uuid"]
-        if not path.is_dir():
-            return jsonify(success=False, error="Artifacts not downloaded yet")
-        open_in_os_default(str(path.resolve()))
-        return jsonify(success=True)
+        if target == "path":
+            if "path" not in data:
+                return jsonify(success=False, error="Missing path"), 400
+            with lock:
+                base = state["samples_dir"].resolve()
+            try:
+                path = Path(str(data["path"])).resolve()
+            except (OSError, ValueError) as e:
+                return jsonify(success=False, error=f"Bad path: {e}"), 400
+            try:
+                path.relative_to(base)
+            except ValueError:
+                return jsonify(success=False, error="Path is outside artifacts dir"), 400
+            if not path.exists():
+                return jsonify(success=False, error="Path does not exist"), 404
+            open_in_os_default(str(path))
+            return jsonify(success=True)
 
-    @app.route("/api/open-config", methods=["POST"])
-    def open_config() -> ResponseReturnValue:
-        # Spawn a GUI editor — $EDITOR/$VISUAL would block on a terminal that
-        # the Flask process doesn't own. Notepad / TextEdit / xdg-open are
-        # universally available and detach cleanly.
-        path = str(config_path().resolve())
-        system = platform.system()
-        if system == "Windows":
-            subprocess.Popen(["notepad", path])
-        elif system == "Darwin":
-            subprocess.Popen(["open", "-e", path])
-        else:
-            subprocess.Popen(["xdg-open", path])
-        return jsonify(success=True)
+        if target == "artifacts":
+            with lock:
+                path = state["samples_dir"] / state["uuid"]
+            if not path.is_dir():
+                return jsonify(success=False, error="Artifacts not downloaded yet")
+            open_in_os_default(str(path.resolve()))
+            return jsonify(success=True)
+
+        if target == "config":
+            # OS default editor — $EDITOR/$VISUAL would block on a terminal the
+            # Flask process doesn't own; open_in_os_default detaches cleanly.
+            open_in_os_default(str(config_path().resolve()))
+            return jsonify(success=True)
+
+        return jsonify(success=False, error="Unknown target"), 400
 
     @app.route("/api/stop-other-container", methods=["POST"])
     def stop_other_container() -> ResponseReturnValue:
@@ -1142,17 +999,29 @@ def create_app(
         open_vscode_in_container(cn, project_dir)
         return jsonify(success=True)
 
-    @app.route("/api/toggle-autostart", methods=["POST"])
-    def toggle_autostart() -> ResponseReturnValue:
-        with lock:
-            state["cli_no_container"] = not state["cli_no_container"]
-            return jsonify(success=True, cli_no_container=state["cli_no_container"])
+    @app.route("/api/toggle", methods=["POST"])
+    def toggle_setting() -> ResponseReturnValue:
+        """Flip a boolean session setting, chosen by ``setting``.
 
-    @app.route("/api/toggle-attach", methods=["POST"])
-    def toggle_attach() -> ResponseReturnValue:
+        Body ``{"setting": "autostart"|"attach"}``:
+
+        - ``autostart`` flips ``cli_no_container`` (whether the next sample
+          auto-starts a container).
+        - ``attach`` flips ``attach`` (whether opening VS Code attaches).
+
+        Returns ``{success, setting, value}`` with the new boolean.
+        """
+        data = request.get_json()
+        if not isinstance(data, dict):
+            return jsonify(success=False, error="Invalid request"), 400
+        setting = data.get("setting")
+        field = {"autostart": "cli_no_container", "attach": "attach"}.get(str(setting))
+        if field is None:
+            return jsonify(success=False, error="Unknown setting"), 400
         with lock:
-            state["attach"] = not state["attach"]
-            return jsonify(success=True, attach=state["attach"])
+            value = not state[field]  # type: ignore[literal-required]
+            state[field] = value  # type: ignore[literal-required]
+        return jsonify(success=True, setting=setting, value=value)
 
     @app.route("/api/exit", methods=["POST"])
     def exit_app() -> ResponseReturnValue:
@@ -1161,7 +1030,6 @@ def create_app(
             # Block further disk-mutating routes (timer-state, scratchpad,
             # score submit) so a late write can't race the exit. In-memory only.
             state["exiting"] = True
-            save_fn(state)
 
         # Exit in a daemon thread after a short delay so this response flushes
         # to the browser (which shows "Exiting...") before the process dies.

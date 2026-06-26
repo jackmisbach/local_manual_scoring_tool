@@ -172,15 +172,6 @@
             #scratchpad-status:empty {
                 display: none;
             }
-            .scratchpad-actions {
-                float: right;
-                display: inline-flex;
-                gap: 6px;
-            }
-            .scratchpad-scope-btn {
-                padding: 3px 10px;
-                font-size: 0.78em;
-            }
             /* Submit Score panel mirrors the scratch pad so the two sit at the
                same height side by side: a bare card (padding moved into the
                header + .content) whose header bar matches the scratch pad
@@ -213,8 +204,8 @@
                 gap: 8px;
                 flex-shrink: 0;
             }
-            /* Sized to match the scratch pad summary's scope buttons so the
-               header bar is the same height as the scratch pad summary. */
+            /* Compact sizing so the header bar matches the height of the
+               scratch pad summary, keeping the two panels aligned side by side. */
             .score-header-actions button {
                 font-size: 0.78em;
                 padding: 3px 10px;
@@ -721,8 +712,8 @@
                 background: #e2e8f0;
             }
             /* Clickable file paths shown in status messages. The click hits
-               /api/open-path which launches the OS default app — file://
-               links from http:// pages are blocked by browsers, so we
+               /api/open (target=path) which launches the OS default app —
+               file:// links from http:// pages are blocked by browsers, so we
                route through the server. */
             .path-link {
                 font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -1209,7 +1200,6 @@
                     >
                         Done Scoring Sample
                     </button>
-                    {% if mode != "single" %}
                     <button
                         type="button"
                         class="btn-neutral"
@@ -1219,7 +1209,6 @@
                     >
                         Skip
                     </button>
-                    {% endif %}
                 </div>
             </form>
             </div>{# .content (score form) #}
@@ -1250,20 +1239,7 @@
         <div class="col-resizer" data-pair="1"></div>
         <div class="panel-cell">
             <details id="scratchpad-section" data-panel="scratchpad" data-fill>
-                <summary
-                    >Scratch pad<span class="scratchpad-actions"
-                        ><button type="button" class="btn-neutral scratchpad-scope-btn" id="scratchpad-save-task" disabled>
-                            Save to task</button
-                        ><button
-                            type="button"
-                            class="btn-neutral scratchpad-scope-btn"
-                            id="scratchpad-save-variant"
-                            disabled
-                        >
-                            Save to variant</button
-                        ></span
-                    ></summary
-                >
+                <summary>Scratch pad</summary>
                 <div class="content">
                     <textarea
                         id="scratchpad-textarea"
@@ -1414,7 +1390,7 @@
                     <p id="setup-error-text" style="color: #991b1b; margin-top: 8px"></p>
                     <p style="margin-top: 12px">
                         <button class="btn-warning" onclick="retrySetup()" id="retry-btn">Retry</button>
-                        {% if mode != "single" and not has_local_history %}
+                        {% if not has_local_history %}
                         <button type="button" class="btn-neutral" onclick="skipSample()" style="margin-left: 4px">
                             Skip
                         </button>
@@ -1424,13 +1400,13 @@
             </div>
 
             <div class="section bottom-section">
-                <button class="btn-primary" onclick="openArtifacts()" id="open-artifacts-btn">
+                <button class="btn-primary" onclick="openArtifacts()" id="artifacts-btn">
                     Open Artifacts Folder
                 </button>
                 <button
                     class="btn-neutral btn-row-gap"
                     onclick="openConfig()"
-                    id="open-config-btn"
+                    id="config-btn"
                     title="Open config.json in a text editor (changes apply on next manual-score run)"
                 >
                     Config
@@ -1476,16 +1452,6 @@
             // minutes + explanation). Comes from config.json via
             // `manual-score config set clear_on_submit <mode>`.
             const CLEAR_ON_SUBMIT = {{ clear_on_submit | tojson }};
-            // Task/variant scratch-pad scopes. The textarea auto-saves per
-            // sample; the header buttons promote its content to a reusable
-            // note that seeds other samples of the same task/variant (load
-            // precedence: per-sample > variant > task). Stored values are
-            // mirrored here so a button can disable itself when saving would
-            // be a no-op.
-            const SCRATCHPAD_TASK_NAME = {{ info.task_name | tojson }};
-            const SCRATCHPAD_VARIANT = {{ info.task_variant | tojson }};
-            let scratchpadTaskStored = {{ task_scratchpad_content | tojson }};
-            let scratchpadVariantStored = {{ variant_scratchpad_content | tojson }};
 
             function fieldEl(fieldName) {
                 const form = document.getElementById("score-form");
@@ -1860,7 +1826,7 @@
                 label.textContent = running ? "Pause Timer" : "Resume Timer";
             }
 
-            // Persisted in the sample's ui_state.jsonl record under "timers" so a sample
+            // Persisted in the sample's history.jsonl record under "timers" so a sample
             // switch and back restores the stopwatch where it left off.
             const TIMER_STATE_INIT = {{ timer_state | tojson }};
 
@@ -2516,6 +2482,9 @@
                         showResultHtml("success",
                             "Score saved locally to " + pathLinkHtml(data.score_path) + ".");
                         showToast("success", "Score saved locally");
+                        // data.score_path is history.jsonl (working/UI state);
+                        // scores.jsonl is generated on demand via the export
+                        // subcommand, not written on submit.
                         // The server only drops the stash when the submitted
                         // entry exactly matches it; sync the banner to that
                         // decision so a stash that survived the submit stays
@@ -2719,7 +2688,11 @@
 
             async function openArtifacts() {
                 try {
-                    const resp = await fetch("/api/open-artifacts", { method: "POST" });
+                    const resp = await fetch("/api/open", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ target: "artifacts" }),
+                    });
                     const data = await resp.json();
                     if (!data.success) alert("Error: " + (data.error || "Unknown"));
                 } catch (err) {
@@ -2729,7 +2702,11 @@
 
             async function openConfig() {
                 try {
-                    const resp = await fetch("/api/open-config", { method: "POST" });
+                    const resp = await fetch("/api/open", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ target: "config" }),
+                    });
                     const data = await resp.json();
                     if (!data.success) alert("Error: " + (data.error || "Unknown"));
                 } catch (err) {
@@ -2738,9 +2715,9 @@
             }
 
             // Render an absolute path as a clickable link that opens via
-            // /api/open-path (server-side OS launch). Browsers block file://
-            // links from http:// pages, so we route the click through the
-            // backend. Returns an HTML string suitable for innerHTML.
+            // /api/open (target=path, server-side OS launch). Browsers block
+            // file:// links from http:// pages, so we route the click through
+            // the backend. Returns an HTML string suitable for innerHTML.
             function escapeHtml(s) {
                 return String(s).replace(/[&<>"']/g, c => ({
                     "&": "&amp;", "<": "&lt;", ">": "&gt;",
@@ -2758,10 +2735,10 @@
                 if (!link) return;
                 ev.preventDefault();
                 try {
-                    const resp = await fetch("/api/open-path", {
+                    const resp = await fetch("/api/open", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ path: link.dataset.path }),
+                        body: JSON.stringify({ target: "path", path: link.dataset.path }),
                     });
                     if (!resp.ok) {
                         const data = await resp.json().catch(() => ({}));
@@ -2835,6 +2812,9 @@
                     });
                     const data = await resp.json();
                     if (data.success) {
+                        // data.score_path is history.jsonl, where the draft
+                        // persists (scores.jsonl is a generated export, not
+                        // touched by stashing).
                         showResultHtml("success",
                             "Score stashed to " + pathLinkHtml(data.score_path) + ".");
                         // Snapshot what we just sent BEFORE clearing the
@@ -2943,7 +2923,11 @@
 
             async function toggleAttach() {
                 try {
-                    await fetch("/api/toggle-attach", { method: "POST" });
+                    await fetch("/api/toggle", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ setting: "attach" }),
+                    });
                 } catch {}
             }
 
@@ -2968,7 +2952,11 @@
 
             async function toggleAutostart() {
                 try {
-                    await fetch("/api/toggle-autostart", { method: "POST" });
+                    await fetch("/api/toggle", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ setting: "autostart" }),
+                    });
                 } catch {}
             }
 
@@ -3282,7 +3270,7 @@
             // is a global preference (persists across samples in this session)
             // via the <details> element's `open` attribute; content is fetched
             // at page render time and saved back into the sample's
-            // ui_state.jsonl record under "scratchpad" on input
+            // history.jsonl record under "scratchpad" on input
             // (debounced) and on blur.
             const SCRATCHPAD_OPEN_KEY = "manualScoringScratchpadVisibleV1";
             const scratchpadSection = document.getElementById("scratchpad-section");
@@ -3329,73 +3317,8 @@
                 scratchpadStatus.textContent = "";
                 if (scratchpadSaveTimer !== null) clearTimeout(scratchpadSaveTimer);
                 scratchpadSaveTimer = setTimeout(saveScratchpadNow, 800);
-                updateScratchpadScopeButtons();
             });
             scratchpadTextarea.addEventListener("blur", saveScratchpadNow);
-
-            // "Save to task" / "Save to variant": promote the current notes to
-            // a reusable scope stored in a separate dotfile. A button is disabled
-            // when the sample lacks that scope or the notes already match what's
-            // stored, so the disabled state doubles as save confirmation.
-            const scratchpadSaveTaskBtn = document.getElementById("scratchpad-save-task");
-            const scratchpadSaveVariantBtn = document.getElementById("scratchpad-save-variant");
-
-            function updateScratchpadScopeButtons() {
-                const content = scratchpadTextarea.value;
-                const taskSame = content === scratchpadTaskStored;
-                const variantSame = content === scratchpadVariantStored;
-                scratchpadSaveTaskBtn.disabled = !SCRATCHPAD_TASK_NAME || taskSame;
-                scratchpadSaveVariantBtn.disabled = !SCRATCHPAD_VARIANT || variantSame;
-                scratchpadSaveTaskBtn.title = !SCRATCHPAD_TASK_NAME
-                    ? "This sample has no task name"
-                    : taskSame
-                      ? "Notes already saved for this task"
-                      : `Save these notes as the default for task "${SCRATCHPAD_TASK_NAME}"`;
-                scratchpadSaveVariantBtn.title = !SCRATCHPAD_VARIANT
-                    ? "This sample has no task variant"
-                    : variantSame
-                      ? "Notes already saved for this variant"
-                      : `Save these notes for variant "${SCRATCHPAD_VARIANT}" only`;
-            }
-
-            async function saveScratchpadScope(scope) {
-                const content = scratchpadTextarea.value;
-                const url = scope === "task" ? "/api/scratchpad/task" : "/api/scratchpad/variant";
-                scratchpadStatus.textContent = "Saving...";
-                try {
-                    const resp = await fetch(url, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ content }),
-                    });
-                    const data = await resp.json();
-                    if (data.success) {
-                        if (scope === "task") scratchpadTaskStored = content;
-                        else scratchpadVariantStored = content;
-                        updateScratchpadScopeButtons();
-                        scratchpadStatus.textContent = scope === "task" ? "Saved to task." : "Saved to variant.";
-                    } else {
-                        scratchpadStatus.textContent = "Save failed: " + (data.error || "unknown");
-                    }
-                } catch (err) {
-                    scratchpadStatus.textContent = "Save failed: " + err.message;
-                }
-            }
-
-            // stopPropagation/preventDefault so a click on the button doesn't
-            // also toggle the <details> it lives inside.
-            scratchpadSaveTaskBtn.addEventListener("click", (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                saveScratchpadScope("task");
-            });
-            scratchpadSaveVariantBtn.addEventListener("click", (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                saveScratchpadScope("variant");
-            });
-
-            updateScratchpadScopeButtons();
         </script>
         <script>
             // Wire every [data-dismissible-banner] element: show it unless the

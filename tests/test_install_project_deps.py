@@ -69,10 +69,7 @@ def test_fallback_records_only_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
     # Batch fails; fallback installs three, skips one. Only the skipped one
     # is returned, parsed from the __SKIPPED__ marker.
     stdout = (
-        "__OK__ numpy==1.26.0\n"
-        "__OK__ requests\n"
-        "__SKIPPED__ pynput==1.7.6\n"
-        "__OK__ rich\n"
+        "__OK__ numpy==1.26.0\n" "__OK__ requests\n" "__SKIPPED__ pynput==1.7.6\n" "__OK__ rich\n"
     )
     monkeypatch.setattr(subprocess, "run", _make_run(batch_rc=1, fallback_stdout=stdout))
     assert infra._install_project_deps("c", "/proj") == ["pynput==1.7.6"]  # pyright: ignore[reportPrivateUsage]

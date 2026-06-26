@@ -9,6 +9,8 @@ dist/
 .vscode/
 .cursorindexingignore
 data/
+.ruff_cache
+.pytest_cache
 # Per-user config (gitignored; seeded on first run)
 config.json
 

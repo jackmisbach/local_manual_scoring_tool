@@ -45,15 +45,15 @@ def test_get_scores_lists_user_submissions(client: FlaskClient) -> None:
         assert e["score"]["metadata"]["author"] == SCORER_EMAIL
 
 
-def test_get_scores_includes_finish_events(client: FlaskClient) -> None:
+def test_get_scores_includes_finished_at(client: FlaskClient) -> None:
     _submit(client, 0.6, 8, "scored")
     fin = client.post("/api/finish")
     assert fin.status_code == 200
 
     resp = client.get("/api/scores")
     data = resp.get_json()
-    assert len(data["finish_events"]) == 1
-    assert data["finish_events"][0]["author"] == SCORER_EMAIL
+    assert isinstance(data["finished_at"], str)
+    assert data["finished_at"]
 
 
 def test_get_scores_accepts_uuid_param(client: FlaskClient) -> None:

@@ -91,8 +91,8 @@ def _docker_load(tar_path: Path) -> str | None:
     )
     if result.returncode != 0:
         raise RuntimeError(f"docker load failed for {tar_path}: {result.stderr.strip()}")
-    for line in result.stdout.splitlines():
-        line = line.strip()
+    for raw in result.stdout.splitlines():
+        line = raw.strip()
         if line.startswith("Loaded image:"):
             return line.split(":", 1)[1].strip()
     return None

@@ -6,9 +6,14 @@ Usage:
 
 SAMPLES_DIR is a directory whose immediate subdirectories are samples (each a
 ``<uuid>/`` containing a ``project/`` dir). You can also point directly at a
-single sample dir. Scores are written to ``<samples-dir>/scores.jsonl`` and
-working/UI state to ``<samples-dir>/ui_state.jsonl``. Container images are
+single sample dir. Working/UI state (including each sample's score history) is
+written to ``<samples-dir>/history.jsonl``; the flat ``scores.jsonl`` export is
+generated on demand by ``local-manual-score export``. Container images are
 loaded on demand from ``<images-dir>/<task_name>.tar``.
+
+Subcommands:
+    local-manual-score config ...           inspect/modify saved config
+    local-manual-score export [SAMPLES_DIR] (re)build scores.jsonl from history
 """
 
 import argparse
@@ -32,6 +37,7 @@ from scoring.config import (
     resolve_samples_dir,
     resolve_scorer,
 )
+from scoring.export import export_scores
 from scoring.infra import (
     ensure_task_image,
     open_vscode_in_container,
@@ -43,7 +49,6 @@ from scoring.infra import (
 from scoring.state import (
     AdvanceResult,
     QueueEntry,
-    QueueStatus,
     ScoringState,
     load_sample_json,
     local_sample_info,
@@ -52,17 +57,11 @@ from scoring.state import (
     stub_sample_info,
 )
 from scoring.store import (
-    STATUS_DONE,
-    STATUS_OPEN,
-    STATUS_SCORED,
-    STATUS_SKIPPED,
-    TrackedSample,
-    derive_status_from_score_file,
-    ensure_tracking_entries,
+    derive_queue_status,
     load_score_file,
-    load_tracking,
+    load_skipped,
+    migrate_legacy_history_file,
     queue_summary_fields,
-    save_tracking,
 )
 from scoring.task_selection import load_selection
 
@@ -134,7 +133,7 @@ def shuffle_within_groups(queue: list[QueueEntry]) -> list[QueueEntry]:
 def build_local_queue(
     samples_dir: Path,
     sample_ids: list[str],
-    tracking: dict[str, TrackedSample],
+    skipped: set[str],
     *,
     include_skipped: bool = False,
     include_done: bool = False,
@@ -142,9 +141,10 @@ def build_local_queue(
 ) -> list[QueueEntry]:
     """Build the scoring queue from local sample dirs and the on-disk store.
 
-    Status is derived from each sample's stored record. ``include_skipped`` /
-    ``include_done`` re-surface skipped / finished samples as navigable. A
-    ``task_selection`` drops samples whose (known) task is deselected.
+    Status is derived from each sample's score file plus the ``skipped`` set
+    (see :func:`derive_queue_status`). ``include_skipped`` / ``include_done``
+    re-surface skipped / finished samples as navigable. A ``task_selection``
+    drops samples whose (known) task is deselected.
     """
     queue: list[QueueEntry] = []
     for uuid in sample_ids:
@@ -157,22 +157,17 @@ def build_local_queue(
             and not task_selection[task_name]
         ):
             continue
-        tracking_entry = tracking.get(uuid, {})
-        local_status = tracking_entry.get("status")
         score_file = load_score_file(samples_dir, uuid)
         summary_fields = queue_summary_fields(score_file)
-        has_history = bool(score_file and score_file["history"])
-        if local_status == STATUS_SKIPPED and not include_skipped:
-            status: QueueStatus = "skipped"
-        else:
-            derived = derive_status_from_score_file(score_file, STATUS_OPEN)
-            if derived == STATUS_DONE and include_done:
-                derived = STATUS_SCORED if has_history else STATUS_OPEN
-            status = derived
+        status = derive_queue_status(
+            score_file,
+            skipped=uuid in skipped,
+            include_skipped=include_skipped,
+            include_done=include_done,
+        )
         entry: QueueEntry = {
             "uuid": uuid,
             "task_name": task_name or "(no task)",
-            "sample_id": uuid,
             "status": status,
             **summary_fields,  # type: ignore[typeddict-item]
         }
@@ -180,7 +175,9 @@ def build_local_queue(
     return shuffle_within_groups(queue)
 
 
-def scan_task_universe(samples_dir: Path, sample_ids: list[str]) -> tuple[list[str], dict[str, int]]:
+def scan_task_universe(
+    samples_dir: Path, sample_ids: list[str]
+) -> tuple[list[str], dict[str, int]]:
     """Return (sorted task names, per-task sample counts) across the sample dirs."""
     counts: dict[str, int] = {}
     for uuid in sample_ids:
@@ -189,17 +186,6 @@ def scan_task_universe(samples_dir: Path, sample_ids: list[str]) -> tuple[list[s
             continue
         counts[tn] = counts.get(tn, 0) + 1
     return sorted(counts), counts
-
-
-def populate_tracking_from_queue(
-    tracking: dict[str, TrackedSample],
-    queue: list[QueueEntry],
-    *,
-    touched: set[str] | None = None,
-) -> int:
-    """Ensure every scorable queue id has a tracking row. Returns rows added."""
-    missing = [e["uuid"] for e in queue if e["uuid"] not in tracking]
-    return ensure_tracking_entries(tracking, missing, touched=touched)
 
 
 # ---------------------------------------------------------------------------
@@ -248,8 +234,8 @@ def _setup_sample(state: ScoringState, lock: threading.Lock) -> None:
             cli_image = state["cli_image"]
             no_container = state["no_container"]
             attach = state["attach"]
-            sample_id = state["queue"][state["current_idx"]]["sample_id"]
-            gui = state["gui_override"] or sample_needs_gui(sample_id)
+            sample_uuid = state["queue"][state["current_idx"]]["uuid"]
+            gui = state["gui_override"] or sample_needs_gui(sample_uuid)
             state["setup_state"]["gui"] = gui
 
         if no_container:
@@ -301,7 +287,7 @@ def _setup_sample(state: ScoringState, lock: threading.Lock) -> None:
             dep_warnings=skipped_deps,
         )
         print("Ready to score — switch to the Scoring UI in your browser.")
-    except Exception as e:  # noqa: BLE001 - surface any setup failure in the UI
+    except Exception as e:
         _update_setup_state(state, lock, uuid, status="error", message=str(e))
 
 
@@ -331,29 +317,21 @@ def advance_to_next(state: ScoringState, lock: threading.Lock) -> AdvanceResult:
     return "advanced"
 
 
-def save_state(state: ScoringState) -> None:
-    """Persist the tracking rows touched since the last save."""
-    touched = state["tracking_touched"]
-    save_tracking(state["samples_dir"], state["tracking"], touched)
-    touched.clear()
-
-
 def rebuild_queue_after_selection(state: ScoringState, lock: threading.Lock) -> None:
     """Rebuild the queue with the current task selection; reset to first pending."""
     stop_all_scoring_containers()
     with lock:
-        tracking = state["tracking"]
-        touched = state["tracking_touched"]
         samples_dir = state["samples_dir"]
         sample_ids = list(state["sample_ids"])
         include_skipped = state["include_skipped"]
         include_done = state["include_done"]
 
     selection = load_selection()
+    skipped = load_skipped(samples_dir)
     queue = build_local_queue(
         samples_dir,
         sample_ids,
-        tracking,
+        skipped,
         include_skipped=include_skipped,
         include_done=include_done,
         task_selection=selection or None,
@@ -381,10 +359,8 @@ def rebuild_queue_after_selection(state: ScoringState, lock: threading.Lock) -> 
         state["info"] = info
         state["container_name"] = container_name
         state["setup_state"] = {"status": setup_status}
+        state["skipped"] = skipped
         state.pop("pending_task_selection", None)
-        populate_tracking_from_queue(tracking, queue, touched=touched)
-        save_tracking(samples_dir, tracking, touched)
-        touched.clear()
 
     if queue:
         threading.Thread(target=state["setup_fn"], daemon=True).start()
@@ -408,9 +384,12 @@ def _resolve_targets(samples_dir: Path) -> tuple[Path, list[str]]:
 
 
 def _build_state(args: argparse.Namespace, scorer_email: str) -> ScoringState | None:
-    single = has_project_dir(args.samples_dir)
     samples_root, sample_ids = _resolve_targets(args.samples_dir)
     images_dir = resolve_images_dir(args.images_dir, samples_root)
+
+    # Single-threaded startup point, before any threads/Flask start: bring a
+    # legacy working/UI state file forward to history.jsonl so data isn't lost.
+    migrate_legacy_history_file(samples_root)
 
     if not sample_ids:
         print(
@@ -420,12 +399,12 @@ def _build_state(args: argparse.Namespace, scorer_email: str) -> ScoringState | 
         )
         return None
 
-    tracking = load_tracking(samples_root)
+    skipped = load_skipped(samples_root)
     selection = load_selection()
     queue = build_local_queue(
         samples_root,
         sample_ids,
-        tracking,
+        skipped,
         include_skipped=args.include_skipped,
         include_done=args.include_done,
         task_selection=selection or None,
@@ -437,35 +416,33 @@ def _build_state(args: argparse.Namespace, scorer_email: str) -> ScoringState | 
             file=sys.stderr,
         )
 
-    skipped = sum(1 for s in queue if s["status"] == "skipped")
+    skipped_count = sum(1 for s in queue if s["status"] == "skipped")
     done = sum(1 for s in queue if s["status"] == "done")
     pending = sum(1 for s in queue if s["status"] in ("open", "scored"))
     no_pending = pending == 0
     if no_pending and queue:
         hints: list[str] = []
-        if skipped:
+        if skipped_count:
             hints.append("--include-skipped")
         if done:
             hints.append("--include-done")
         hint = f" Use {' or '.join(hints)} to re-surface them." if hints else ""
         print(f"All {len(queue)} samples already processed.{hint} Opening summary.")
     elif queue:
-        if skipped or done:
-            print(f"Resuming: {done} done, {skipped} skipped, {pending} remaining of {len(queue)}")
+        if skipped_count or done:
+            print(
+                f"Resuming: {done} done, {skipped_count} skipped,"
+                f" {pending} remaining of {len(queue)}"
+            )
         else:
             print(f"{len(queue)} sample(s) to score")
 
     current_idx = next((i for i, s in enumerate(queue) if s["status"] == "open"), 0)
     first_uuid = queue[current_idx]["uuid"] if queue else ""
-    info = (
-        local_sample_info(first_uuid, samples_root)
-        if first_uuid
-        else stub_sample_info()
-    )
+    info = local_sample_info(first_uuid, samples_root) if first_uuid else stub_sample_info()
     all_tasks, task_counts = scan_task_universe(samples_root, sample_ids)
 
     state: ScoringState = {
-        "mode": "single" if single else "queue",
         "queue": queue,
         "current_idx": current_idx,
         "uuid": first_uuid,
@@ -482,8 +459,7 @@ def _build_state(args: argparse.Namespace, scorer_email: str) -> ScoringState | 
         "cli_no_container": args.no_container,
         "attach": not args.no_attach,
         "setup_fn": lambda: None,
-        "tracking": tracking,
-        "tracking_touched": set(),
+        "skipped": skipped,
         "include_skipped": args.include_skipped,
         "include_done": args.include_done,
         "all_tasks": all_tasks,
@@ -491,11 +467,6 @@ def _build_state(args: argparse.Namespace, scorer_email: str) -> ScoringState | 
     }
     if no_pending:
         state["pending_summary"] = True
-
-    touched = state["tracking_touched"]
-    populate_tracking_from_queue(tracking, queue, touched=touched)
-    save_tracking(samples_root, tracking, touched)
-    touched.clear()
     return state
 
 
@@ -507,13 +478,12 @@ def _run_app(args: argparse.Namespace, state: ScoringState, lock: threading.Lock
     if not state.get("pending_task_selection") and not state.get("pending_summary"):
         threading.Thread(target=state["setup_fn"], daemon=True).start()
 
-    from scoring.app import create_app  # noqa: PLC0415
+    from scoring.app import create_app
 
     app = create_app(
         state=state,
         lock=lock,
         advance_fn=lambda: advance_to_next(state, lock),
-        save_fn=save_state,
         rebuild_queue_fn=lambda: rebuild_queue_after_selection(state, lock),
     )
 
@@ -537,8 +507,43 @@ def _run_app(args: argparse.Namespace, state: ScoringState, lock: threading.Lock
         if status in ("pulling", "starting", "ready"):
             print("\nStopping container...")
             stop_container(container_name)
-        with lock:
-            save_state(state)
+
+
+def export_main(argv: list[str]) -> None:
+    """Handle ``local-manual-score export [SAMPLES_DIR]``.
+
+    Rebuilds ``<samples-dir>/scores.jsonl`` from ``history.jsonl`` history and
+    prints the written path plus the row count. Resolves the samples dir exactly
+    like the main command: the optional positional arg, else the
+    resolved/configured samples dir. No Flask, no Docker.
+    """
+    parser = argparse.ArgumentParser(
+        prog="local-manual-score export",
+        description=(
+            "Generate scores.jsonl (the canonical flat export) from"
+            " history.jsonl history. Overwrites any existing file."
+        ),
+    )
+    parser.add_argument(
+        "samples_dir",
+        nargs="?",
+        type=Path,
+        default=None,
+        help=(
+            "Directory of samples (each subdir a <uuid>/ with a project/ folder),"
+            " or a single sample dir. Defaults to saved config, else ./samples."
+        ),
+    )
+    args = parser.parse_args(argv)
+
+    samples_dir = resolve_samples_dir(args.samples_dir)
+    samples_root, _ = _resolve_targets(samples_dir)
+    # Single-threaded entry: migrate any legacy working/UI state file first.
+    migrate_legacy_history_file(samples_root)
+    path = export_scores(samples_root)
+    with path.open(encoding="utf-8") as f:
+        rows = sum(1 for line in f if line.strip())
+    print(f"Wrote {rows} row(s) to {path}")
 
 
 def main() -> None:
@@ -546,6 +551,10 @@ def main() -> None:
 
     if len(sys.argv) > 1 and sys.argv[1] == "config":
         config_main(sys.argv[2:])
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "export":
+        export_main(sys.argv[2:])
         return
 
     parser = argparse.ArgumentParser(
@@ -578,7 +587,10 @@ def main() -> None:
         " (otherwise each sample.json's 'image' tarball is loaded from the images dir).",
     )
     parser.add_argument(
-        "--port", type=int, default=_SCORING_PORT, help=f"Scoring UI port (default: {_SCORING_PORT})"
+        "--port",
+        type=int,
+        default=_SCORING_PORT,
+        help=f"Scoring UI port (default: {_SCORING_PORT})",
     )
     parser.add_argument(
         "--gui", action="store_true", help="Force noVNC for all samples (auto-detected for *_gui_*)"

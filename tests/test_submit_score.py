@@ -6,34 +6,33 @@ There is no Hawk in this fork. A successful submit must:
   ``scorer`` (the human's identity lives in ``score.metadata.author``), the
   form's value/explanation at the top of ``score``, and
   ``minutes_spent_scoring`` + ``scoring_version`` + ``scored_at`` in
-  ``score.metadata``;
-- append that entry to the sample's ``history`` (in ``ui_state.jsonl``); and
-- append one flat line to ``scores.jsonl`` at the samples root.
+  ``score.metadata``; and
+- append that entry to the sample's ``history`` (in ``history.jsonl``).
 
-The response carries the local ``score_path`` (where scores.jsonl lives). Input
-validation (the 400 surface and the all-optional stash path) lives in
-test_score_validation.py.
+It must NOT touch ``scores.jsonl`` — that's a generated export, rebuilt on
+demand by ``local-manual-score export`` (round-tripped in test_export.py).
+
+The response carries the local ``score_path`` (where the score persisted —
+``history.jsonl``). Input validation (the 400 surface and the all-optional
+stash path) lives in test_score_validation.py.
 """
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 from flask.testing import FlaskClient
 
-from scoring.store import load_score_file, scores_path
-from tests.conftest import SAMPLE_TASK, SAMPLE_UUID, SCORER_EMAIL
+from scoring.store import history_path, load_score_file, scores_path
+from tests.conftest import SAMPLE_UUID, SCORER_EMAIL
 
 
 def _basic_form() -> dict[str, Any]:
     return {"value": 0.7, "explanation": "looks good", "minutes_to_score": 12}
 
 
-def test_submit_score_appends_history_entry(
-    client: FlaskClient, samples_dir: Path
-) -> None:
+def test_submit_score_appends_history_entry(client: FlaskClient, samples_dir: Path) -> None:
     resp = client.post("/api/submit-score", json=_basic_form())
     assert resp.status_code == 200
     data = resp.get_json()
@@ -59,28 +58,19 @@ def test_submit_score_appends_history_entry(
     assert isinstance(meta.get("scored_at"), str)
 
 
-def test_submit_score_appends_flat_line_to_scores_jsonl(
-    client: FlaskClient, samples_dir: Path
-) -> None:
+def test_submit_score_does_not_write_scores_jsonl(client: FlaskClient, samples_dir: Path) -> None:
+    """scores.jsonl is a generated export — submit must not create/append it."""
     resp = client.post("/api/submit-score", json=_basic_form())
     assert resp.status_code == 200
+    assert not scores_path(samples_dir).exists()
+
+
+def test_submit_score_response_points_at_history(client: FlaskClient, samples_dir: Path) -> None:
+    """The response ``score_path`` is where the score actually persists."""
+    resp = client.post("/api/submit-score", json=_basic_form())
     data = resp.get_json()
-
-    flat_path = scores_path(samples_dir)
-    assert flat_path.exists()
-    # The response points the client at this same file.
-    assert data["score_path"] == str(flat_path)
-
-    lines = [l for l in flat_path.read_text(encoding="utf-8").splitlines() if l.strip()]
-    assert len(lines) == 1
-    row = json.loads(lines[0])
-    assert row["id"] == SAMPLE_UUID
-    assert row["scorer"] == SCORER_EMAIL
-    assert row["value"] == 0.7
-    assert row["explanation"] == "looks good"
-    assert row["minutes_to_score"] == 12
-    assert isinstance(row["scored_at"], str)
-    assert row["task_name"] == SAMPLE_TASK
+    assert data["score_path"] == str(history_path(samples_dir))
+    assert history_path(samples_dir).exists()
 
 
 def test_submit_score_includes_saved_entry_in_response(client: FlaskClient) -> None:
