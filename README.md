@@ -1,175 +1,66 @@
 # local-manual-scoring-tool
 
-A local Flask web UI for **manually scoring agent runs that are already staged on
-disk**. It starts a Docker container with the sample's `project/` directory
-bind-mounted, attaches VS Code to it (if the `code` CLI is on your PATH), and
-serves a scoring form at <http://localhost:9090>.
+Tool for external people to manually score agent runs.
 
-This is a stripped-down, local-only fork: **no Hawk, no AWS/S3, no network sync.**
-Everything it reads and writes lives under a local `data/` directory.
+It: 
+1. Loads data from a `data` dir
+2. Starts a docker container with the agents output inside, and opens VSCode for you to look at it
+3. Opens up a web interface where you can record your scores (<http://localhost:9090>)
 
 ## Prerequisites
 
-- **Docker Desktop** — must be running (the tool `docker load`s task images and
-  starts containers). Pass `--no-container` to run the UI without Docker for
-  testing.
-- **uv** — to manage the venv and run / install the tool.
-- **VS Code `code` CLI** (optional) — if `code` is on your PATH the tool
-  auto-attaches VS Code into the running container. Without it, scoring still
-  works; you just don't get the editor attach.
+- Docker desktop
+- uv 
+- VSCode (you can run `code`)
 
 ## Install
 
-### Run from a clone (dev)
-
 ```bash
-uv sync
-uv run local-manual-score data/samples     # explicit samples dir
-uv run local-manual-score                  # use the default / configured samples dir
-```
-
-### Install as a tool
-
-```bash
-uv tool install .                          # from a checkout
-# or
 uv tool install git+https://github.com/METR/local_manual_scoring_tool
 ```
 
-Then run `local-manual-score` directly. For local development against an
-editable checkout:
+Copy paste `data.zip` from [this gdrive](https://drive.google.com/drive/folders/1LLhzKMvhB6k7fDZq5sI9KkTmsxm46F35?dmr=1&ec=wgc-drive-globalnav-goto) into the root of this repo, then unzip it with the password you were given:
 
 ```bash
-uv tool install --editable .
+unzip data.zip
 ```
 
-## On-disk layout
-
-By default the tool works against a `data/` directory with sibling `samples/`
-and `images/` dirs:
-
-```
-data/
-├── samples/
-│   ├── <uuid>/
-│   │   ├── project/        # the agent's working tree (bind-mounted into the container)
-│   │   └── sample.json     # optional per-sample metadata (see below)
-│   ├── <uuid>/
-│   │   └── project/
-│   ├── scores.jsonl        # flat finalized-score export (generated on demand)
-│   └── history.jsonl       # per-sample working/UI state incl. score history (output)
-└── images/
-    └── <task>-<version>.tar  # docker save image archive(s)
-```
-
-A sample is any immediate subdirectory of the samples dir that contains a
-`project/` directory (an `artifacts/` dir is also accepted). You can also point
-the tool at a single sample dir directly.
-
-### `sample.json`
-
-Optional, lives inside each `<uuid>/`. All fields are optional — scoring works
-without it, but you then must supply the image via `--image`.
-
-```json
-{
-  "task": "<task name>",
-  "image": "<image-tarball-filename>"
-}
-```
-
-- `task` — selects the task-specific guidance link and groups/sorts the queue.
-- `image` — the **filename** of the image tarball inside the images dir
-  (e.g. `sunlight-0_1_0.tar`). It must match the tarball produced when staging
-  the image.
-
-## Staging task images
-
-Container images must already be available locally as `docker save` tarballs in
-the images dir (or already loaded into Docker and selected with `--image`).
-**There is no `docker pull`.**
-
-To stage an image, use the developer utility (which is the one place that talks
-to Hawk/AWS/ECR):
-
+Then run 
 ```bash
-./dev/download_starting_image.py <sample-uuid> [<uuid> ...]
+local-manual-score
 ```
-
-It writes `data/images/<task>-<version>.tar`. Set each sample's `sample.json`
-`image` field to that tarball's filename. See [`dev/README.md`](dev/README.md).
-
-### How images load
-
-When a sample is opened, the tool looks up its tarball (`images_dir/<image>`),
-reads the image's `RepoTag` from the tarball's manifest, and:
-
-- reuses the image if that tag is already present in Docker, otherwise
-- runs `docker load` on the tarball.
-
-Samples that share the same tarball only load the image once.
-
-## Guidance links
-
-The scoring page shows two links: a **general scoring guidance** doc and a
-**task-specific** one for the sample's `task`. Set them via config:
-
-```bash
-local-manual-score config set general_guidance_url "https://docs.example/guidance"
-local-manual-score config set task_specific_guidance_url.<task> "https://docs.example/<task>"
-```
-
-The task-specific map is keyed by task name (the nested `...url.<task>` form sets
-one entry).
-
-## Scoring workflow
-
-1. The tool discovers every sample under the samples dir, builds a queue sorted
-   by task (and shuffled within each task group), and opens the UI.
-2. For the current sample it loads the image, starts the container with
-   `project/` bind-mounted, and (if `code` is available) attaches VS Code.
-3. You fill in the score, minutes spent, and an explanation, then **Submit**.
-   - **Next Sample** advances to the next unscored sample.
-   - **Skip** skips the current sample (re-surface later with `--include-skipped`).
-   - **Done Scoring This Sample** marks it finished (re-surface with `--include-done`).
-4. Every finalized submission is appended to the sample's score history in
-   `data/samples/history.jsonl`, alongside working state (drafts, timers,
-   scratchpad, status), so quitting and re-running resumes where you left off.
-   The flat `data/samples/scores.jsonl` export is **not** written on submit —
-   generate it on demand with `local-manual-score export` (see below).
-
-The tool is **blind-only**: the model name is never recorded or shown anywhere
-(there is no model field in `sample.json`, the queue, or `scores.jsonl`).
 
 ## Exporting scores
 
-`scores.jsonl` is the canonical flat export (consumed downstream). It is **not**
-written on submit; it is rebuilt on demand from each sample's history in
-`history.jsonl`:
+When you are done with your scores. Export your scoring records with this command and send the file to us.
 
 ```bash
-local-manual-score export [SAMPLES_DIR]
+local-manual-score export data/samples
 ```
 
-This (over)writes `<samples-dir>/scores.jsonl` — one flat line per finalized
-score across all samples (`id`, `scorer`, `value`, `explanation`,
-`minutes_to_score`, `scored_at`, `task_name`) — and prints the path and row
-count. `SAMPLES_DIR` resolves the same way as the main command (the optional
-positional arg, else the configured/`./data/samples` default). Re-running it is
-idempotent. No Docker or Flask is involved.
 
-## GUI tasks (noVNC)
+## Extras
 
-Tasks whose name contains `_gui_` (or ends in `_gui`) get noVNC set up
-automatically in the container; you can also force it for all samples with
-`--gui`. View the display at <http://localhost:6080/vnc.html>. Run GUI apps
-inside the container with:
+### Config
+
+Config path is `~/.config/local-manual-scoring-tool/config.json`
 
 ```bash
-DISPLAY=:99 SDL_VIDEODRIVER=x11 XDG_RUNTIME_DIR=/tmp python main.py
+local-manual-score config show
 ```
 
-## CLI flags
+| Key                          | Description                                                                                       |
+| ---------------------------- | ------------------------------------------------------------------------------------------------- |
+| `samples_dir`                | Default samples dir when none is passed on the CLI.                                                |
+| `images_dir`                 | Default images dir (otherwise `<samples-dir>/../images`).                                          |
+| `scorer_email`               | Your scorer identity (resolved + persisted on first run).                                          |
+| `browser_command`            | Shell command to open the UI URL (URL appended last, or substituted into a `{url}` placeholder).   |
+| `clear_on_submit`            | What the form clears after submit: `all`, `none`, `scores` (default), or `text`.                   |
+| `pause_timer_hotkey`         | `KeyboardEvent.key` value that toggles the scoring timer (default `Pause`; empty disables).        |
+| `general_guidance_url`       | General scoring guidance doc link shown on every scoring page.                                     |
+| `task_specific_guidance_url` | Per-task guidance links; set one with `config set task_specific_guidance_url.<task> <url>`.        |
+
+### CLI flags
 
 ```bash
 local-manual-score [SAMPLES_DIR] [options]
@@ -191,29 +82,13 @@ local-manual-score [SAMPLES_DIR] [options]
 Scorer identity resolves in order: `--scorer` > config `scorer_email` >
 `git config user.email` > your username.
 
-## Configuration
+### GUI tasks (noVNC)
 
-Config lives at `~/.config/local-manual-scoring-tool/config.json` (honors
-`$XDG_CONFIG_HOME`). Inspect or change it with the `config` subcommand:
+Tasks whose name contains `_gui_` (or ends in `_gui`) get noVNC set up
+automatically in the container; you can also force it for all samples with
+`--gui`. View the display at <http://localhost:6080/vnc.html>. Run GUI apps
+inside the container with:
 
 ```bash
-local-manual-score config show              # path + contents
-local-manual-score config path              # path only
-local-manual-score config edit              # open in $EDITOR
-local-manual-score config set KEY VALUE
-local-manual-score config unset KEY
+DISPLAY=:99 SDL_VIDEODRIVER=x11 XDG_RUNTIME_DIR=/tmp python main.py
 ```
-
-| Key                          | Description                                                                                       |
-| ---------------------------- | ------------------------------------------------------------------------------------------------- |
-| `samples_dir`                | Default samples dir when none is passed on the CLI.                                                |
-| `images_dir`                 | Default images dir (otherwise `<samples-dir>/../images`).                                          |
-| `scorer_email`               | Your scorer identity (resolved + persisted on first run).                                          |
-| `browser_command`            | Shell command to open the UI URL (URL appended last, or substituted into a `{url}` placeholder).   |
-| `clear_on_submit`            | What the form clears after submit: `all`, `none`, `scores` (default), or `text`.                   |
-| `pause_timer_hotkey`         | `KeyboardEvent.key` value that toggles the scoring timer (default `Pause`; empty disables).        |
-| `general_guidance_url`       | General scoring guidance doc link shown on every scoring page.                                     |
-| `task_specific_guidance_url` | Per-task guidance links; set one with `config set task_specific_guidance_url.<task> <url>`.        |
-
-(The UI's Tasks button also persists a `task_selection` map here, controlling
-which tasks appear in the queue.)

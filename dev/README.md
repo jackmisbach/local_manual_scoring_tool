@@ -1,9 +1,13 @@
-# dev
+# dev — staging data & developing the tool
 
-Developer utilities for staging task data on disk for the local manual scoring tool.
+Developer utilities and workflow for the [local manual scoring tool](../README.md).
+The scoring tool scores samples that are **already staged on disk**; this directory
+is how you stage that data (samples + their task images) and how you work on the
+tool itself.
 
-Shared Hawk-API / sample-resolution helpers live in `_common.py`; both scripts import
-it (each script runs standalone — Python puts `dev/` on the import path).
+Staging is the one place that talks to **Hawk / AWS / ECR** — the scoring tool
+itself never does. Shared Hawk-API / sample-resolution helpers live in `_common.py`;
+both scripts import it (each runs standalone — Python puts `dev/` on the import path).
 
 ## `download_sample.py`
 
@@ -78,3 +82,110 @@ Same as METR/manual-scoring-tool:
 
 If a UUID fails to resolve or an image fails to pull/save, the rest still run; the
 script exits non-zero and lists the failures.
+
+## How images load (at scoring time)
+
+When the scoring tool opens a sample it looks up its tarball (`images_dir/<image>`),
+reads the image's `RepoTag` from the tarball's manifest, and:
+
+- reuses the image if that tag is already present in Docker, otherwise
+- runs `docker load` on the tarball.
+
+Samples that share the same tarball only load the image once. There is **no
+`docker pull`**.
+
+## Developing the tool
+
+Run from a clone instead of `uv tool install`:
+
+```bash
+uv sync
+uv run local-manual-score data/samples     # explicit samples dir
+uv run local-manual-score                  # default / configured samples dir
+```
+
+For an editable global install: `uv tool install --editable .`.
+
+### Checks
+
+```bash
+uv run ruff check scoring tests
+uv run ruff format scoring tests
+uv run pyright scoring tests
+uv run pytest
+```
+
+Conventions: Python ≥ 3.11; ruff (line length 100) + pyright strict; stdlib +
+Flask + markdown-it only (no heavyweight deps). `dev/`, `data/`, `tmp/`, and
+`local/` are excluded from lint/type checks. See [`CLAUDE.md`](../CLAUDE.md) for a
+module map and architecture orientation.
+
+## Scoring workflow
+
+1. The tool discovers every sample under the samples dir, builds a queue sorted
+   by task (and shuffled within each task group), and opens the UI.
+2. For the current sample it loads the image, starts the container with
+   `project/` bind-mounted, and (if `code` is available) attaches VS Code.
+3. You fill in the score, minutes spent, and an explanation, then **Submit**.
+   - **Next Sample** advances to the next unscored sample.
+   - **Skip** skips the current sample (re-surface later with `--include-skipped`).
+   - **Done Scoring This Sample** marks it finished (re-surface with `--include-done`).
+4. Every finalized submission is appended to the sample's score history in
+   `data/samples/history.jsonl`, alongside working state (drafts, timers,
+   scratchpad, status), so quitting and re-running resumes where you left off.
+   The flat `data/samples/scores.jsonl` export is **not** written on submit —
+   generate it on demand with `local-manual-score export` (see below).
+
+
+### `sample.json`
+
+Optional, lives inside each `<uuid>/`. All fields are optional — scoring works
+without it, but you then must supply the image via `--image`.
+
+```json
+{
+  "task": "<task name>",
+  "image": "<image-tarball-filename>"
+}
+```
+
+- `task` — selects the task-specific guidance link and groups/sorts the queue.
+- `image` — the **filename** of the image tarball inside the images dir
+  (e.g. `sunlight-0_1_0.tar`). It must match the tarball produced when staging
+  the image.
+
+## Staging samples and images
+
+The tool only scores data that is **already on disk** — it never pulls from the
+network. Samples (`<uuid>/project/` + `sample.json`) and their task images
+(`docker save` tarballs in the images dir) are produced by a separate developer
+step that talks to Hawk/AWS. See [`dev/README.md`](dev/README.md).
+
+Images load on demand: the first time a sample using a given tarball is opened the
+tool `docker load`s it (reusing the image if its tag is already present locally),
+so there is **no `docker pull`** and samples sharing a tarball load only once.
+
+
+## On-disk layout
+
+By default the tool works against a `data/` directory with sibling `samples/`
+and `images/` dirs:
+
+```
+data/
+├── samples/
+│   ├── <uuid>/
+│   │   ├── project/        # the agent's working tree (bind-mounted into the container)
+│   │   └── sample.json     # optional per-sample metadata (see below)
+│   ├── <uuid>/
+│   │   └── project/
+│   ├── scores.jsonl        # flat finalized-score export (generated on demand)
+│   └── history.jsonl       # per-sample working/UI state incl. score history (output)
+└── images/
+    └── <task>-<version>.tar  # docker save image archive(s)
+```
+
+A sample is any immediate subdirectory of the samples dir that contains a
+`project/` directory (an `artifacts/` dir is also accepted). You can also point
+the tool at a single sample dir directly.
+
