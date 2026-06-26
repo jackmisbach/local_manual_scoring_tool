@@ -464,11 +464,6 @@
                 border-radius: 10px;
                 font-family: inherit;
             }
-            .prior-scores-list .badge-hawk {
-                background: #d1fae5;
-                color: #065f46;
-                border: 1px solid #6ee7b7;
-            }
             .prior-scores-list .badge-local {
                 background: #fef3c7;
                 color: #92400e;
@@ -1003,15 +998,6 @@
         >
             <h1 style="margin-bottom: 0">
                 <span data-info-field="title-task">{{ info.task_name }}{% if info.task_variant %} / {{ info.task_variant }}{% endif %}</span> / {{ uuid }}
-                <a
-                    id="viewer-url-link"
-                    href="{{ info.viewer_url or '#' }}"
-                    target="_blank"
-                    class="blind-hidden"
-                    title="Open in viewer"
-                    style="font-size: 0.65em; text-decoration: none; margin-left: 6px; vertical-align: middle; {% if not info.viewer_url %}display: none;{% endif %}"
-                    >&#x2197;</a
-                >
             </h1>
             <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap">
                 <label
@@ -1041,25 +1027,6 @@
                 <span><strong>Variant:</strong> <span data-info-field="task_variant">{{ info.task_variant or '?' }}</span></span>
                 <span><strong>Version:</strong> <span data-info-field="task_version">{{ info.task_version or '?' }}</span></span>
                 <span><strong>Eval Set:</strong> <span data-info-field="eval_set_id">{{ info.eval_set_id or '?' }}</span></span>
-                <span><strong>By:</strong> <span data-info-field="created_by">{{ info.created_by or '?' }}</span></span>
-                <span
-                    ><strong>Duration:</strong> <span data-info-field="duration">{{ fmt_duration(info.working_time_seconds) }} working / {{
-                    fmt_duration(info.total_time_seconds) }} total</span></span
-                >
-                <span
-                    data-info-field="tokens-tooltip"
-                    title="Input: {{ '{:,}'.format(info.input_tokens) if info.input_tokens is not none else '?' }}
-Cache read: {{ '{:,}'.format(info.cache_read_tokens) if info.cache_read_tokens is not none else '?' }}
-Cache write: {{ '{:,}'.format(info.cache_write_tokens) if info.cache_write_tokens is not none else '?' }}
-Output: {{ '{:,}'.format(info.output_tokens) if info.output_tokens is not none else '?' }}
-Reasoning: {{ '{:,}'.format(info.reasoning_tokens) if info.reasoning_tokens is not none else '?' }}
-Total: {{ '{:,}'.format(info.total_tokens) if info.total_tokens is not none else '?' }}"
-                    style="text-decoration: underline dotted; text-underline-offset: 3px; cursor: help"
-                    ><strong>Tokens:</strong> <span data-info-field="total_tokens_short">{{ fmt_tokens(info.total_tokens) }}</span></span
-                >
-                <span><strong>Messages:</strong> <span data-info-field="message_count">{{ info.message_count or '?' }}</span></span>
-                <span><strong>Actions:</strong> <span data-info-field="action_count">{{ info.action_count or '?' }}</span></span>
-                <span><strong>Status:</strong> <span data-info-field="status">{{ info.status or '?' }}</span></span>
             </div>
         </details>
         {% endif %}
@@ -1302,7 +1269,7 @@ Total: {{ '{:,}'.format(info.total_tokens) if info.total_tokens is not none else
                 <div class="content">
                     <textarea
                         id="scratchpad-textarea"
-                        placeholder="Notes for this sample. Saved automatically. Not submitted, not pushed to Hawk."
+                        placeholder="Notes for this sample. Saved automatically. Not part of the submitted score."
                     >
 {{ scratchpad_content }}</textarea
                     >
@@ -1456,23 +1423,6 @@ Total: {{ '{:,}'.format(info.total_tokens) if info.total_tokens is not none else
                         {% endif %}
                     </p>
                 </div>
-                <div
-                    id="hawkless-blocked"
-                    {% if initial_section != "hawkless-blocked" %}style="display: none"{% endif %}
-                >
-                    <h2 style="color: #92400e">Container unavailable in hawkless mode</h2>
-                    <p id="hawkless-blocked-text" style="color: #78350f; margin-top: 8px; white-space: pre-wrap">
-                        {{ hawkless_blocked_message }}
-                    </p>
-                    <p style="margin-top: 12px">
-                        <button class="btn-warning" onclick="retrySetup()">Retry</button>
-                        {% if mode != "single" and not has_local_history %}
-                        <button type="button" class="btn-neutral" onclick="skipSample()" style="margin-left: 4px">
-                            Skip
-                        </button>
-                        {% endif %}
-                    </p>
-                </div>
             </div>
 
             <div class="section bottom-section">
@@ -1519,8 +1469,8 @@ Total: {{ '{:,}'.format(info.total_tokens) if info.total_tokens is not none else
             // in place on every successful submit.
             const historyEntries = {{ history_entries | tojson }};
             // Highest minutes_to_score from any prior submission by this
-            // scorer (Hawk row + local history). Refreshed from the submit
-            // response so a resubmit with lower minutes still warns.
+            // scorer's local history. Refreshed from the submit response so a
+            // resubmit with lower minutes still warns.
             let priorMaxMinutes = {{ prior_max_minutes | tojson }};
             // Clearing behavior after a successful submit. Values:
             // "none" (keep fields), "text" (clear explanation only), "scores"
@@ -1912,7 +1862,7 @@ Total: {{ '{:,}'.format(info.total_tokens) if info.total_tokens is not none else
                 label.textContent = running ? "Pause Timer" : "Resume Timer";
             }
 
-            // Persisted in <uuid>/_score.json under "timers" so a sample
+            // Persisted in the sample's ui_state.jsonl record under "timers" so a sample
             // switch and back restores the stopwatch where it left off.
             const TIMER_STATE_INIT = {{ timer_state | tojson }};
 
@@ -2055,7 +2005,7 @@ Total: {{ '{:,}'.format(info.total_tokens) if info.total_tokens is not none else
                 saveTimerStateNow();
             }
 
-            const SECTION_IDS = ["container-idle", "setup-progress", "container-ready", "setup-error", "hawkless-blocked"];
+            const SECTION_IDS = ["container-idle", "setup-progress", "container-ready", "setup-error"];
             function showSection(id) {
                 SECTION_IDS.forEach(s => {
                     var el = document.getElementById(s);
@@ -2067,11 +2017,6 @@ Total: {{ '{:,}'.format(info.total_tokens) if info.total_tokens is not none else
                 if (data.status === "error") {
                     showSection("setup-error");
                     document.getElementById("setup-error-text").textContent = data.message || "Unknown error";
-                    return;
-                }
-                if (data.status === "hawkless-blocked") {
-                    showSection("hawkless-blocked");
-                    document.getElementById("hawkless-blocked-text").textContent = data.message || "";
                     return;
                 }
                 if (data.status === "downloading" || data.status === "pulling" || data.status === "starting") {
@@ -2262,9 +2207,7 @@ Total: {{ '{:,}'.format(info.total_tokens) if info.total_tokens is not none else
 
             // ---------- Prior-scores panel + toast helpers ----------
             // The panel is driven entirely by `historyEntries` (server-rendered
-            // on load + appended after each successful submit). No extra Hawk
-            // fetch — sync status comes from the local `submitted_to` flag set
-            // by the submit response.
+            // on load + appended after each successful submit).
             function priorScoreView(entry) {
                 const score = (entry && entry.score) || {};
                 const meta = score.metadata || {};
@@ -2311,9 +2254,9 @@ Total: {{ '{:,}'.format(info.total_tokens) if info.total_tokens is not none else
                     badge.textContent = "draft";
                     badge.title = "Unsubmitted stash";
                 } else {
-                    badge.className = "badge " + (v.submitted === "hawk" ? "badge-hawk" : "badge-local");
-                    badge.textContent = v.submitted === "hawk" ? "Hawk" : "local";
-                    badge.title = v.submitted === "hawk" ? "Pushed to Hawk" : "Local only";
+                    badge.className = "badge badge-local";
+                    badge.textContent = "local";
+                    badge.title = "Local only";
                 }
                 const when = document.createElement("span");
                 when.className = "ps-when";
@@ -2500,7 +2443,7 @@ Total: {{ '{:,}'.format(info.total_tokens) if info.total_tokens is not none else
             async function finishSample() {
                 const btn = document.getElementById("finish-btn");
                 if (!btn || btn.disabled) return;
-                if (!confirm("Mark this sample as done scoring? This sends a finish event to Hawk.")) return;
+                if (!confirm("Mark this sample as done scoring?")) return;
                 btn.disabled = true;
                 const originalLabel = btn.textContent;
                 btn.textContent = "Sending...";
@@ -2508,8 +2451,7 @@ Total: {{ '{:,}'.format(info.total_tokens) if info.total_tokens is not none else
                     const resp = await fetch("/api/finish", { method: "POST" });
                     const data = await resp.json();
                     if (resp.ok && data.success) {
-                        const ref = data.request_uuid ? " (" + data.request_uuid.slice(0, 8) + ")" : "";
-                        showToast("success", "Marked as done scoring" + ref);
+                        showToast("success", "Marked as done scoring");
                         btn.textContent = "Done Scoring Sample ✓";
                         // Reload so the section collapses to the "finished"
                         // message and the form contents disappear.
@@ -2573,18 +2515,9 @@ Total: {{ '{:,}'.format(info.total_tokens) if info.total_tokens is not none else
                     });
                     const data = await resp.json();
                     if (data.success) {
-                        if (data.hawkless) {
-                            showResultHtml("success",
-                                "Score saved locally to "
-                                + pathLinkHtml(data.score_path)
-                                + ". Run <code>manual-score-submit</code> to push to Hawk.");
-                            showToast("success", "Saved locally — push later with manual-score-submit");
-                        } else {
-                            showResultText("success",
-                                "Score submitted successfully!");
-                            const ref = data.request_uuid ? " (" + data.request_uuid.slice(0, 8) + ")" : "";
-                            showToast("success", "Score submitted to Hawk" + ref);
-                        }
+                        showResultHtml("success",
+                            "Score saved locally to " + pathLinkHtml(data.score_path) + ".");
+                        showToast("success", "Score saved locally");
                         // The server only drops the stash when the submitted
                         // entry exactly matches it; sync the banner to that
                         // decision so a stash that survived the submit stays
@@ -3350,8 +3283,8 @@ Total: {{ '{:,}'.format(info.total_tokens) if info.total_tokens is not none else
             // Scratch pad: per-sample free-form notes, no history. Open/closed
             // is a global preference (persists across samples in this session)
             // via the <details> element's `open` attribute; content is fetched
-            // at page render time and saved back into
-            // `<artifacts>/<uuid>/_score.json["scratchpad"]` on input
+            // at page render time and saved back into the sample's
+            // ui_state.jsonl record under "scratchpad" on input
             // (debounced) and on blur.
             const SCRATCHPAD_OPEN_KEY = "manualScoringScratchpadVisibleV1";
             const scratchpadSection = document.getElementById("scratchpad-section");
@@ -3403,7 +3336,7 @@ Total: {{ '{:,}'.format(info.total_tokens) if info.total_tokens is not none else
             scratchpadTextarea.addEventListener("blur", saveScratchpadNow);
 
             // "Save to task" / "Save to variant": promote the current notes to
-            // a reusable scope stored outside _score.json. A button is disabled
+            // a reusable scope stored in a separate dotfile. A button is disabled
             // when the sample lacks that scope or the notes already match what's
             // stored, so the disabled state doubles as save confirmation.
             const scratchpadSaveTaskBtn = document.getElementById("scratchpad-save-task");

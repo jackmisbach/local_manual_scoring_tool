@@ -367,9 +367,7 @@ def rebuild_queue_after_selection(state: ScoringState, lock: threading.Lock) -> 
         setup_status = "starting"
     else:
         first_uuid = ""
-        info = stub_sample_info(
-            {"uuid": "", "task_name": "", "sample_id": "", "model": "", "status": "open"}
-        )
+        info = stub_sample_info()
         container_name = ""
         setup_status = "idle"
 
@@ -463,9 +461,7 @@ def _build_state(args: argparse.Namespace, scorer_email: str) -> ScoringState | 
     info = (
         local_sample_info(first_uuid, samples_root)
         if first_uuid
-        else stub_sample_info(
-            {"uuid": "", "task_name": "", "sample_id": "", "model": "", "status": "open"}
-        )
+        else stub_sample_info()
     )
     all_tasks, task_counts = scan_task_universe(samples_root, sample_ids)
 

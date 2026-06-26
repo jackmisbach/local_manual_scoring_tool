@@ -44,7 +44,6 @@ class QueueEntry(TypedDict):
     explanation: NotRequired[str]
     minutes_to_score: NotRequired[float]
     has_stash: NotRequired[bool]
-    error: NotRequired[str]
 
 
 class SetupState(TypedDict):
@@ -62,12 +61,11 @@ class SetupState(TypedDict):
 
 
 class SampleInfo(TypedDict):
-    """Scoring-relevant metadata for a single sample.
+    """Scoring-relevant metadata for a single sample, read from ``sample.json``.
 
-    Most run-info fields (tokens, durations, counts) have no local source and
-    default to ``None``/``""``; the scoring page hides their rows when empty.
-    ``task_name`` / ``task_variant`` / ``model`` / ``image`` come from the
-    sample dir's ``sample.json`` when present.
+    Scoring works even with no ``sample.json`` (the form only needs the project
+    dir and the guidance links); ``no_metadata`` then drives an explanatory
+    banner and the image must be supplied via ``--image``.
     """
 
     task_name: str
@@ -76,22 +74,7 @@ class SampleInfo(TypedDict):
     project_dir: str
     image: str
     model: str
-    created_by: str
     eval_set_id: str
-    viewer_url: str
-    started_at: str
-    completed_at: str
-    total_time_seconds: float | None
-    working_time_seconds: float | None
-    total_tokens: int | None
-    input_tokens: int | None
-    output_tokens: int | None
-    reasoning_tokens: int | None
-    cache_read_tokens: int | None
-    cache_write_tokens: int | None
-    message_count: int | None
-    action_count: int | None
-    status: str
     # True when the sample has no ``sample.json``; the scoring page shows an
     # explanatory banner and suppresses metadata-derived UI.
     no_metadata: bool
@@ -167,17 +150,8 @@ def sample_task_name(data: dict[str, Any]) -> str:
     return str(data.get("task") or data.get("task_name") or "")
 
 
-def local_sample_info(uuid: str, samples_dir: Path) -> SampleInfo:
-    """Build a :class:`SampleInfo` from the sample dir's ``sample.json``.
-
-    Recognized ``sample.json`` keys: ``task`` (task name), ``image`` (the image
-    tarball filename inside the images dir), and optionally ``task_variant`` /
-    ``model`` / ``project_dir``. Scoring works even with no ``sample.json`` (the
-    form only needs the project dir and the guidance links); ``no_metadata``
-    then drives an explanatory banner and the image must be supplied via
-    ``--image``.
-    """
-    data = load_sample_json(samples_dir, uuid)
+def _sample_info(data: dict[str, Any]) -> SampleInfo:
+    """Build a :class:`SampleInfo` from a ``sample.json`` dict (``{}`` if none)."""
     return {
         "task_name": sample_task_name(data),
         "task_version": str(data.get("task_version", "") or ""),
@@ -185,53 +159,27 @@ def local_sample_info(uuid: str, samples_dir: Path) -> SampleInfo:
         "project_dir": str(data.get("project_dir", "") or DEFAULT_PROJECT_DIR),
         "image": str(data.get("image", "") or ""),
         "model": str(data.get("model", "") or ""),
-        "created_by": str(data.get("created_by", "") or ""),
         "eval_set_id": str(data.get("eval_set_id", "") or ""),
-        "viewer_url": "",
-        "started_at": "",
-        "completed_at": "",
-        "total_time_seconds": None,
-        "working_time_seconds": None,
-        "total_tokens": None,
-        "input_tokens": None,
-        "output_tokens": None,
-        "reasoning_tokens": None,
-        "cache_read_tokens": None,
-        "cache_write_tokens": None,
-        "message_count": None,
-        "action_count": None,
-        "status": "",
         "no_metadata": not data,
     }
 
 
-def stub_sample_info(entry: QueueEntry) -> SampleInfo:
-    """Placeholder SampleInfo for the empty-queue case."""
-    return {
-        "task_name": entry.get("task_name", "") or "",
-        "task_version": "",
-        "task_variant": "",
-        "project_dir": DEFAULT_PROJECT_DIR,
-        "image": "",
-        "model": entry.get("model", "") or "",
-        "created_by": "",
-        "eval_set_id": "",
-        "viewer_url": "",
-        "started_at": "",
-        "completed_at": "",
-        "total_time_seconds": None,
-        "working_time_seconds": None,
-        "total_tokens": None,
-        "input_tokens": None,
-        "output_tokens": None,
-        "reasoning_tokens": None,
-        "cache_read_tokens": None,
-        "cache_write_tokens": None,
-        "message_count": None,
-        "action_count": None,
-        "status": "",
-        "no_metadata": True,
-    }
+def local_sample_info(uuid: str, samples_dir: Path) -> SampleInfo:
+    """Build a :class:`SampleInfo` from the sample dir's ``sample.json``.
+
+    Recognized ``sample.json`` keys: ``task`` (task name), ``image`` (the image
+    tarball filename inside the images dir), and optionally ``task_variant`` /
+    ``model`` / ``project_dir`` / ``eval_set_id``. Scoring works even with no
+    ``sample.json`` (the form only needs the project dir and the guidance
+    links); ``no_metadata`` then drives an explanatory banner and the image
+    must be supplied via ``--image``.
+    """
+    return _sample_info(load_sample_json(samples_dir, uuid))
+
+
+def stub_sample_info() -> SampleInfo:
+    """Placeholder SampleInfo for the empty-queue case (no sample to load)."""
+    return _sample_info({})
 
 
 def next_pending_index(queue: list[QueueEntry], after: int) -> int | None:

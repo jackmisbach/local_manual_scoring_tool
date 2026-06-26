@@ -79,31 +79,11 @@ from scoring.store import (
     save_task_scratchpad,
     save_timer_state,
     save_variant_scratchpad,
-    score_path,
+    scores_path,
     set_stashed,
     set_status,
     stash_matches_submission,
 )
-
-
-def fmt_duration(seconds: float | None) -> str:
-    if seconds is None:
-        return "?"
-    h = int(seconds) // 3600
-    m = (int(seconds) % 3600) // 60
-    if h > 0:
-        return f"{h}h {m}m"
-    return f"{m}m"
-
-
-def fmt_tokens(n: int | None) -> str:
-    if n is None:
-        return "?"
-    if n >= 1_000_000:
-        return f"{n / 1_000_000:.1f}M"
-    if n >= 1_000:
-        return f"{n / 1_000:.0f}K"
-    return str(n)
 
 
 def _validate_bounded_float(
@@ -327,6 +307,17 @@ def apply_heading_anchors(state: StateCore) -> None:
                 break
 
 
+def open_in_os_default(path: str) -> None:
+    """Open ``path`` (a file or folder) with the OS default application."""
+    system = platform.system()
+    if system == "Windows":
+        os.startfile(path)
+    elif system == "Darwin":
+        subprocess.Popen(["open", path])
+    else:
+        subprocess.Popen(["xdg-open", path])
+
+
 def create_app(
     state: ScoringState,
     lock: threading.Lock,
@@ -446,8 +437,6 @@ def create_app(
             uuid=uuid,
             info=info,
             container_name=container_name,
-            fmt_duration=fmt_duration,
-            fmt_tokens=fmt_tokens,
             queue=queue,
             queue_done=queue_done,
             queue_skipped=queue_skipped,
@@ -455,7 +444,6 @@ def create_app(
             show_queue_progress=mode == "queue" and len(queue) > 1,
             current_idx=current_idx,
             mode=mode,
-            hawk=False,
             initial_section=initial_section,
             general_guidance_url=general_guidance_url(),
             task_guidance_url=task_guidance_url(info["task_name"]),
@@ -480,9 +468,6 @@ def create_app(
             attach=attach,
             cli_no_container=cli_no_container,
             config_changes=config_changes,
-            # No live metadata source to refresh from; kept False so the
-            # template's (disabled) refresh-from-Hawk JS path stays inert.
-            info_needs_refresh=False,
         )
 
     @app.route("/tasks")
@@ -625,32 +610,27 @@ def create_app(
         """Re-derive tracking + queue state for ``uuid`` from disk.
 
         Single sync path called by every route that changes a sample's
-        state: submit, stash, drop-stash, push-to-Hawk, and skip. Reads
-        the current ``_score.json`` once and writes the implied state to
-        both the tracking row (status + ``stashed``) and the in-memory
-        queue entry (status + ``has_stash`` + summary columns). Caller
-        must hold ``lock`` and run ``save_fn`` afterward.
+        state: submit, stash, drop-stash, and skip. Reads the current score
+        file once and writes the implied state to both the tracking row
+        (status + ``stashed``) and the in-memory queue entry (status +
+        ``has_stash`` + summary columns). Caller must hold ``lock`` and run
+        ``save_fn`` afterward.
 
         Without ``status_override`` the status is derived from the file by
-        :func:`derive_status_from_score_file` (``pending_done`` >
-        ``pending_score`` > ``done`` > ``scored`` > fallback). The fallback
-        depends on whether history exists: STATUS_DONE if it does (caller
-        used to assume any history meant "done after push"), STATUS_OPEN
-        otherwise.
+        :func:`derive_status_from_score_file` (``done`` > ``scored`` >
+        ``open``).
 
         ``status_override`` is the skip path — the sample's disk state
         hasn't changed, but the user explicitly set a status. In that mode
         we only touch the flags this tool owns (status + ``stashed``) and
-        leave the queue entry's Hawk-derived score columns alone, since
-        they were populated at queue-build time from a source the file
-        can't see.
+        leave the queue entry's score summary columns alone.
 
         ``preserve_skipped`` keeps an existing ``skipped`` status intact
         when the derived status would otherwise demote it to ``open``.
         Stash / drop-stash pass True: drafting (or discarding) a draft on
-        a skipped sample doesn't imply un-skipping. Submit and push leave
-        it False because committing a real score (or syncing one to Hawk)
-        is a deliberate re-entry into the scoring set.
+        a skipped sample doesn't imply un-skipping. Submit leaves it False
+        because committing a real score is a deliberate re-entry into the
+        scoring set.
         """
         samples_dir = state["samples_dir"]
         score_file = load_score_file(samples_dir, uuid)
@@ -658,9 +638,9 @@ def create_app(
 
         if status_override is None:
             # Fallback is OPEN: derive_status_from_score_file handles every
-            # post-action state itself (scored/pending_score/pending_done/done),
-            # so reaching the fallback means there's nothing meaningful on
-            # disk (e.g. stash-only with empty history).
+            # post-action state itself (scored/done), so reaching the fallback
+            # means there's nothing meaningful on disk (e.g. stash-only with
+            # empty history).
             new_status: str = derive_status_from_score_file(score_file, STATUS_OPEN)
             if (
                 preserve_skipped
@@ -761,10 +741,8 @@ def create_app(
         return jsonify(
             success=True,
             has_next=has_next,
-            request_uuid="",
             saved_entry=_saved_score_for_template(entry),
-            hawkless=True,
-            score_path=str(score_path(samples_dir)),
+            score_path=str(scores_path(samples_dir)),
             queue_done=queue_done,
             queue_skipped=queue_skipped,
             queue_total=scorable_total,
@@ -814,14 +792,6 @@ def create_app(
         (ScoreEvent shape + spread flat form fields), so a client can drop
         the payload straight into the prior-scores panel without
         reshaping.
-
-        NOTE: this is a local read, not a Hawk fetch. Hawk's existing
-        ``/samples/{uuid}/scores`` endpoint enforces a UNIQUE constraint on
-        ``(sample_pk, scorer)`` — so for our constant ``scorer="manual_score"``
-        it returns at most ONE row per sample, collapsing every appended
-        ScoreEvent. Per-event history isn't exposed by any Hawk endpoint
-        today; pulling it would require either a new Hawk endpoint or
-        downloading the whole eval log.
         """
         with lock:
             uuid = request.args.get("uuid") or state["uuid"]
@@ -891,7 +861,7 @@ def create_app(
             sync_sample_state(uuid, preserve_skipped=True, eval_set_id=eval_set_id)
             save_fn(state)
 
-        return jsonify(success=True, score_path=str(score_path(samples_dir)))
+        return jsonify(success=True, score_path=str(scores_path(samples_dir)))
 
     @app.route("/api/scratchpad", methods=["POST"])
     def save_scratchpad_route() -> ResponseReturnValue:
@@ -915,9 +885,9 @@ def create_app(
     def save_task_scratchpad_route() -> ResponseReturnValue:
         """Promote the scratch pad to a reusable note for the whole task.
 
-        Stored outside ``_score.json`` in a gitignored dotfile so it seeds
-        every sample of this task (see ``_scratchpad_seed``). UI-only, never
-        pushed to Hawk. Overwrites silently.
+        Stored outside the sample's record in a gitignored dotfile so it
+        seeds every sample of this task (see ``_scratchpad_seed``). UI-only.
+        Overwrites silently.
         """
         data = request.get_json()
         if not isinstance(data, dict) or "content" not in data:
@@ -954,14 +924,14 @@ def create_app(
 
     @app.route("/api/timer-state", methods=["POST"])
     def save_timer_state_route() -> ResponseReturnValue:
-        """Persist the per-sample stopwatch state inside ``_score.json``.
+        """Persist the per-sample stopwatch state inside the sample's record.
 
         Body shape mirrors :class:`TimerState`: the ``normal`` timer carries
-        only ``elapsed_seconds`` (accumulated scoring time). UI-only state —
-        never pushed to Hawk. Called on load, every pause / resume / reset
-        event, periodically while running, and on ``pagehide`` / exit, so a
-        sample switch or restart restores the accumulated time. Pass an empty
-        body to clear the saved state.
+        only ``elapsed_seconds`` (accumulated scoring time). UI-only state.
+        Called on load, every pause / resume / reset event, periodically while
+        running, and on ``pagehide`` / exit, so a sample switch or restart
+        restores the accumulated time. Pass an empty body to clear the saved
+        state.
         """
         data = request.get_json(silent=True) or {}
         if not isinstance(data, dict):
@@ -1010,10 +980,6 @@ def create_app(
             current_idx=current_idx,
             can_navigate=mode == "queue",
             updated_at=updated_at,
-            pending_session_count=0,
-            pending_all_count=0,
-            # Blind-only tool: the model column is always hidden.
-            all_unblinded=False,
             config_changes=drain_changes(),
             pending_summary=pending_summary,
         )
@@ -1124,14 +1090,7 @@ def create_app(
             return jsonify(success=False, error="Path is outside artifacts dir"), 400
         if not target.exists():
             return jsonify(success=False, error="Path does not exist"), 404
-        resolved = str(target)
-        system = platform.system()
-        if system == "Windows":
-            os.startfile(resolved)
-        elif system == "Darwin":
-            subprocess.Popen(["open", resolved])
-        else:
-            subprocess.Popen(["xdg-open", resolved])
+        open_in_os_default(str(target))
         return jsonify(success=True)
 
     @app.route("/api/open-artifacts", methods=["POST"])
@@ -1140,14 +1099,7 @@ def create_app(
             path = state["samples_dir"] / state["uuid"]
         if not path.is_dir():
             return jsonify(success=False, error="Artifacts not downloaded yet")
-        resolved = str(path.resolve())
-        system = platform.system()
-        if system == "Windows":
-            os.startfile(resolved)
-        elif system == "Darwin":
-            subprocess.Popen(["open", resolved])
-        else:
-            subprocess.Popen(["xdg-open", resolved])
+        open_in_os_default(str(path.resolve()))
         return jsonify(success=True)
 
     @app.route("/api/open-config", methods=["POST"])
