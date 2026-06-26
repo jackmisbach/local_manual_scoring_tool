@@ -8,7 +8,7 @@ dist/
 .specstory/
 .vscode/
 .cursorindexingignore
-
+data/
 # Per-user config (gitignored; seeded on first run)
 config.json
 
