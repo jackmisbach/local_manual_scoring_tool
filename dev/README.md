@@ -9,7 +9,14 @@ Staging is the one place that talks to **Hawk / AWS / ECR** — the scoring tool
 itself never does. Shared Hawk-API / sample-resolution helpers live in `_common.py`;
 both scripts import it (each runs standalone — Python puts `dev/` on the import path).
 
-## `download_sample.py`
+## Adding a new run to score
+
+To add a new run to score you will need to 
+1. Download the sample from the db using `download_sample.py`
+2. (If the sample uses an image not already in data/images), use `download_starting_image.py`
+3. Zip the new data dir and update the `data.zip` in [this gdrive](https://drive.google.com/drive/folders/1LLhzKMvhB6k7fDZq5sI9KkTmsxm46F35?dmr=1&ec=wgc-drive-globalnav-goto)
+
+### `download_sample.py`
 
 Stages one or more samples on disk for the local scoring tool. For each run (sample)
 UUID it populates `data/samples/<uuid>/` with:
@@ -133,7 +140,7 @@ module map and architecture orientation.
 4. Every finalized submission is appended to the sample's score history in
    `data/samples/history.jsonl`, alongside working state (drafts, timers,
    scratchpad, status), so quitting and re-running resumes where you left off.
-   The flat `data/samples/scores.jsonl` export is **not** written on submit —
+   The export (`data/samples/output_scores.zip`) is **not** written on submit —
    generate it on demand with `local-manual-score export` (see below).
 
 
@@ -179,7 +186,7 @@ data/
 │   │   └── sample.json     # optional per-sample metadata (see below)
 │   ├── <uuid>/
 │   │   └── project/
-│   ├── scores.jsonl        # flat finalized-score export (generated on demand)
+│   ├── output_scores.zip   # score-log export (generated on demand by `export`)
 │   └── history.jsonl       # per-sample working/UI state incl. score history (output)
 └── images/
     └── <task>-<version>.tar  # docker save image archive(s)
