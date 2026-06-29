@@ -33,9 +33,6 @@ CLEAR_ON_SUBMIT_DEFAULT: ClearOnSubmit = "scores"
 # disables. Default is the Pause/Break key.
 PAUSE_TIMER_HOTKEY_DEFAULT = "Pause"
 
-# Prefix for the nested ``config set task_specific_guidance_url.<task> <url>`` form.
-TASK_GUIDANCE_KEY = "task_specific_guidance_url"
-
 # Every persisted config key with its empty/default value. Written into the file
 # on startup (and on every save) so reading config.json shows every knob.
 _DISCOVERABLE_DEFAULTS: dict[str, object] = {
@@ -45,8 +42,6 @@ _DISCOVERABLE_DEFAULTS: dict[str, object] = {
     "browser_command": "",
     CLEAR_ON_SUBMIT_KEY: CLEAR_ON_SUBMIT_DEFAULT,
     "pause_timer_hotkey": PAUSE_TIMER_HOTKEY_DEFAULT,
-    "general_guidance_url": "",
-    TASK_GUIDANCE_KEY: {},
     "task_selection": {},
 }
 
@@ -62,10 +57,6 @@ class UserConfig(TypedDict):
     browser_command: NotRequired[str]
     clear_on_submit: NotRequired[ClearOnSubmit]
     pause_timer_hotkey: NotRequired[str]
-    # Link to the general scoring guidance doc, shown on every scoring page.
-    general_guidance_url: NotRequired[str]
-    # task_name -> task-specific guidance doc URL.
-    task_specific_guidance_url: NotRequired[dict[str, str]]
     # Global task selection: task_name -> selected.
     task_selection: NotRequired[dict[str, bool]]
     # Pending change descriptions waiting to be shown in the UI startup banner.
@@ -161,8 +152,6 @@ def format_scalar_change(key: str, value: object) -> str:
         "browser_command": "Browser command",
         "clear_on_submit": "Clear-on-submit",
         "pause_timer_hotkey": "Pause-timer hotkey",
-        "general_guidance_url": "General guidance URL",
-        TASK_GUIDANCE_KEY: "Task guidance URLs",
     }.get(key, key)
     return f"{label}: {value}"
 
@@ -202,26 +191,6 @@ def clear_on_submit_mode() -> ClearOnSubmit:
     """Resolved clear-on-submit setting, defaulting to ``"scores"``."""
     raw = cast(dict[str, object], load_config()).get(CLEAR_ON_SUBMIT_KEY)
     return raw if raw in CLEAR_ON_SUBMIT_VALUES else CLEAR_ON_SUBMIT_DEFAULT
-
-
-def general_guidance_url() -> str:
-    """Configured general scoring guidance doc URL, or "" if unset."""
-    return str(cast(dict[str, object], load_config()).get("general_guidance_url", "") or "")
-
-
-def task_guidance_url(task_name: str) -> str:
-    """Task-specific guidance doc URL for ``task_name``, or "" if none configured.
-
-    Also tries the short task name (after the last ``/``) so a ``family/task``
-    name still resolves a guidance entry keyed by the short name.
-    """
-    if not task_name:
-        return ""
-    mapping = cast(dict[str, object], load_config()).get(TASK_GUIDANCE_KEY) or {}
-    if not isinstance(mapping, dict):
-        return ""
-    short = task_name.split("/")[-1]
-    return str(mapping.get(task_name) or mapping.get(short) or "")
 
 
 def default_samples_dir() -> Path:
@@ -309,10 +278,9 @@ def open_url_in_browser(url: str) -> None:
 # ---------------------------------------------------------------------------
 
 # Flat scalar keys settable via `config set KEY VALUE`, derived from
-# `_DISCOVERABLE_DEFAULTS` (dict insertion order) minus the nested keys that are
-# not set via the flat form: the task-specific guidance map is set per-task via
-# `task_specific_guidance_url.<task> <url>`, and `task_selection` is UI-managed.
-_NESTED_CONFIG_KEYS = frozenset({TASK_GUIDANCE_KEY, "task_selection"})
+# `_DISCOVERABLE_DEFAULTS` (dict insertion order) minus `task_selection`, which is
+# UI-managed (not set via the flat form).
+_NESTED_CONFIG_KEYS = frozenset({"task_selection"})
 CONFIG_KEYS: tuple[str, ...] = tuple(
     key for key in _DISCOVERABLE_DEFAULTS if key not in _NESTED_CONFIG_KEYS
 )
@@ -331,7 +299,7 @@ def config_main(argv: list[str]) -> None:
     set_p = sub.add_parser("set", help="Set a config field.")
     set_p.add_argument(
         "key",
-        help=f"One of: {', '.join(CONFIG_KEYS)}, or {TASK_GUIDANCE_KEY}.<task>",
+        help=f"One of: {', '.join(CONFIG_KEYS)}",
     )
     set_p.add_argument("value")
     unset_p = sub.add_parser("unset", help="Remove a config field so its default is used again.")
@@ -370,23 +338,9 @@ def config_edit() -> None:
 
 
 def config_set(key: str, value: str) -> None:
-    if key.startswith(f"{TASK_GUIDANCE_KEY}."):
-        task = key.split(".", 1)[1]
-        if not task:
-            raise SystemExit(f"Missing task name: use {TASK_GUIDANCE_KEY}.<task>")
-        config = load_config()
-        mapping = dict(config.get(TASK_GUIDANCE_KEY, {}))
-        mapping[task] = value
-        update_config(**{TASK_GUIDANCE_KEY: mapping})
-        print(f"Set {TASK_GUIDANCE_KEY}.{task} = {value}")
-        print(f"Saved to {config_path()}")
-        return
-
     if key not in CONFIG_KEYS:
         allowed = ", ".join(CONFIG_KEYS)
-        raise SystemExit(
-            f"Unknown key {key!r}. Settable keys: {allowed}, or {TASK_GUIDANCE_KEY}.<task>"
-        )
+        raise SystemExit(f"Unknown key {key!r}. Settable keys: {allowed}")
 
     parsed: object = value
     if key in ("samples_dir", "images_dir"):
@@ -400,19 +354,6 @@ def config_set(key: str, value: str) -> None:
 
 
 def config_unset(key: str) -> None:
-    if key.startswith(f"{TASK_GUIDANCE_KEY}."):
-        task = key.split(".", 1)[1]
-        config = load_config()
-        mapping = dict(config.get(TASK_GUIDANCE_KEY, {}))
-        if task not in mapping:
-            print(f"{TASK_GUIDANCE_KEY}.{task} was not set; nothing to do.")
-            return
-        del mapping[task]
-        update_config(**{TASK_GUIDANCE_KEY: mapping})
-        print(f"Unset {TASK_GUIDANCE_KEY}.{task}")
-        print(f"Saved to {config_path()}")
-        return
-
     raw = cast(dict[str, object], load_config())
     if key not in raw:
         print(f"{key} was not set; nothing to do.")

@@ -69,8 +69,6 @@ local-manual-score config show
 | `browser_command`            | Shell command to open the UI URL (URL appended last, or substituted into a `{url}` placeholder).   |
 | `clear_on_submit`            | What the form clears after submit: `all`, `none`, `scores` (default), or `text`.                   |
 | `pause_timer_hotkey`         | `KeyboardEvent.key` value that toggles the scoring timer (default `Pause`; empty disables).        |
-| `general_guidance_url`       | General scoring guidance doc link shown on every scoring page.                                     |
-| `task_specific_guidance_url` | Per-task guidance links; set one with `config set task_specific_guidance_url.<task> <url>`.        |
 
 ### CLI flags
 

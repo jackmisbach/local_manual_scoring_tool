@@ -14,7 +14,8 @@ both scripts import it (each runs standalone — Python puts `dev/` on the impor
 To add a new run to score you will need to 
 1. Download the sample from the db using `download_sample.py`
 2. (If the sample uses an image not already in data/images), use `download_starting_image.py`
-3. Zip the new data dir and update the `data.zip` in [this gdrive](https://drive.google.com/drive/folders/1LLhzKMvhB6k7fDZq5sI9KkTmsxm46F35?dmr=1&ec=wgc-drive-globalnav-goto)
+3. Add `scoring_instructions_url` field to the `data/samples/<sample_uuid>/samples.json` files, where the value is a link to a gdoc in [this gdrive](https://drive.google.com/drive/folders/1LLhzKMvhB6k7fDZq5sI9KkTmsxm46F35?dmr=1&ec=wgc-drive-globalnav-goto) with the task specific scoring instructions. 
+4. Zip the new data dir and update the `data.zip` in [this gdrive](https://drive.google.com/drive/folders/1LLhzKMvhB6k7fDZq5sI9KkTmsxm46F35?dmr=1&ec=wgc-drive-globalnav-goto)
 
 ### `download_sample.py`
 

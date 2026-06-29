@@ -23,9 +23,7 @@ from scoring.config import (
     clear_on_submit_mode,
     config_path,
     drain_changes,
-    general_guidance_url,
     pause_timer_hotkey,
-    task_guidance_url,
 )
 from scoring.infra import (
     INFO_ROW,
@@ -427,9 +425,10 @@ def create_app(
             show_queue_progress=len(queue) > 1,
             current_idx=current_idx,
             initial_section=initial_section,
-            general_guidance_url=general_guidance_url(),
-            task_guidance_url=task_guidance_url(info["task_name"]),
-            task_guidance_label=(info["task_name"].split("/")[-1] or "Task") + " guidance",
+            scoring_instructions_url=info["scoring_instructions_url"],
+            scoring_instructions_label=(
+                (info["task_name"].split("/")[-1] or "Task") + " scoring instructions"
+            ),
             stash=_saved_score_for_template(stash, sample_id=uuid),
             most_invested_history=_saved_score_for_template(most_invested_history, sample_id=uuid),
             history_entries=[_saved_score_for_template(e, sample_id=uuid) for e in history_entries],

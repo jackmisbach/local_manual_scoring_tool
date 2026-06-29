@@ -1079,46 +1079,35 @@
         </div>
         {% endif %}
 
-        {# Scoring guidance: links to the external guidance docs, configured via
-           general_guidance_url and task_specific_guidance_url.<task>. #}
-        <div class="section">
-            <strong>Scoring guidance</strong>
-            {% if general_guidance_url or task_guidance_url %}
-            <ul style="margin: 6px 0 0 0; padding-left: 18px;">
-                {% if general_guidance_url %}
-                <li>
-                    <a href="{{ general_guidance_url }}" target="_blank" rel="noopener noreferrer">
-                        General scoring guidance
-                    </a>
-                </li>
-                {% endif %}
-                {% if task_guidance_url %}
-                <li>
-                    <a href="{{ task_guidance_url }}" target="_blank" rel="noopener noreferrer">
-                        {{ task_guidance_label }}
-                    </a>
-                </li>
-                {% endif %}
-            </ul>
-            {% else %}
-            <p style="margin: 6px 0 0 0; color: #6b7280;">
-                No guidance links configured. Set them with
-                <code>local-manual-score config set general_guidance_url &lt;url&gt;</code>
-                and
-                <code>local-manual-score config set task_specific_guidance_url.{{ info.task_name or "&lt;task&gt;" }} &lt;url&gt;</code>.
-            </p>
-            {% endif %}
-        </div>
-
         <div class="section">
             <p>
                 <a
-                    href="https://docs.google.com/document/d/1SCo_tIbPRDsP6B4J1C08o5CTGUSTzDDcsspgvRS_vTY/edit?pli=1&tab=t.4j0zehp6kof"
+                    href="https://docs.google.com/document/d/1fnBool4gRLL8kNds-ZF1YpP5xiHbQOn-uA-2NIkRz_8/edit?tab=t.0"
                     target="_blank"
                     rel="noopener noreferrer"
-                    >Scoring Philosophy</a
+                    >General Scoring Instructions</a
                 >
             </p>
+        </div>
+
+        {# Task-specific scoring instructions: an external doc per task, taken from
+           the sample's sample.json `scoring_instructions_url` field. #}
+        <div class="section">
+            <strong>Task Specific Scoring Instructions</strong>
+            {% if scoring_instructions_url %}
+            <ul style="margin: 6px 0 0 0; padding-left: 18px;">
+                <li>
+                    <a href="{{ scoring_instructions_url }}" target="_blank" rel="noopener noreferrer">
+                        {{ scoring_instructions_label }}
+                    </a>
+                </li>
+            </ul>
+            {% else %}
+            <p style="margin: 6px 0 0 0; color: #6b7280;">
+                No task-specific instructions for this sample. Add a
+                <code>scoring_instructions_url</code> field to its <code>sample.json</code>.
+            </p>
+            {% endif %}
         </div>
 
         {% if not finish_recorded %}

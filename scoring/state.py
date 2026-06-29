@@ -70,6 +70,8 @@ class SampleInfo(TypedDict):
     task_variant: str
     project_dir: str
     image: str
+    # URL of the task-specific scoring instructions doc (from sample.json).
+    scoring_instructions_url: str
     # True when the sample has no ``sample.json``; the scoring page shows an
     # explanatory banner and suppresses metadata-derived UI.
     no_metadata: bool
@@ -156,6 +158,7 @@ def _sample_info(data: dict[str, Any]) -> SampleInfo:
         "task_variant": str(data.get("task_variant") or data.get("variant") or ""),
         "project_dir": str(data.get("project_dir", "") or DEFAULT_PROJECT_DIR),
         "image": str(data.get("image", "") or ""),
+        "scoring_instructions_url": str(data.get("scoring_instructions_url", "") or ""),
         "no_metadata": not data,
     }
 
@@ -165,7 +168,8 @@ def local_sample_info(uuid: str, samples_dir: Path) -> SampleInfo:
 
     Recognized ``sample.json`` keys: ``task`` (task name), ``image`` (the image
     tarball filename inside the images dir), and optionally ``task_variant`` /
-    ``project_dir``. The sample's identifier is the dir name (``uuid``), not a
+    ``project_dir`` / ``scoring_instructions_url`` (the task-specific scoring
+    instructions doc URL). The sample's identifier is the dir name (``uuid``), not a
     ``sample.json`` field. Scoring works even with no ``sample.json`` (the form
     only needs the project dir and the guidance links); ``no_metadata`` then
     drives an explanatory banner and the image must be supplied via ``--image``.
