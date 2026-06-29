@@ -19,7 +19,7 @@ It:
 uv tool install git+https://github.com/METR/local_manual_scoring_tool
 ```
 
-Copy paste `data.zip` from [this gdrive](https://drive.google.com/drive/folders/1LLhzKMvhB6k7fDZq5sI9KkTmsxm46F35?dmr=1&ec=wgc-drive-globalnav-goto) into the root of this repo, then unzip it with the password you were given:
+Copy paste `data.zip` from [this gdrive](https://drive.google.com/drive/folders/1LLhzKMvhB6k7fDZq5sI9KkTmsxm46F35?dmr=1&ec=wgc-drive-globalnav-goto) into the root of this repo, then unzip it:
 
 ```bash
 unzip data.zip
