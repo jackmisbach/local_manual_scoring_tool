@@ -9,6 +9,12 @@ Staging is the one place that talks to **Hawk / AWS / ECR** — the scoring tool
 itself never does. Shared Hawk-API / sample-resolution helpers live in `_common.py`;
 both scripts import it (each runs standalone — Python puts `dev/` on the import path).
 
+## Things users need to use local-manual-scoring-tool
+
+1. Read access to this repo
+2. Read access to [this gdrive](https://drive.google.com/drive/folders/1LLhzKMvhB6k7fDZq5sI9KkTmsxm46F35?dmr=1&ec=wgc-drive-globalnav-goto)
+3. Instructions to send the logs exported using `local-manual-score export data/samples` to us.
+
 ## Adding a new run to score
 
 To add a new run to score you will need to 

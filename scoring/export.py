@@ -37,7 +37,7 @@ def export_score_logs(samples_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     for uuid, score_file in iter_score_files(samples_dir):
-        lines = score_log_lines(score_file, uuid)
+        lines = score_log_lines(score_file)
         if not lines:
             continue
         sample_out = out_dir / uuid

@@ -37,11 +37,6 @@ logger = logging.getLogger(__name__)
 HISTORY_FILENAME = "history.jsonl"
 LEGACY_HISTORY_FILENAME = "ui_state.jsonl"
 
-# Stable namespace for deriving a ``local_event_uuid`` for pre-feature history
-# entries that predate the field. Deterministic so repeated exports of the same
-# entry resolve to the same uuid (the DB dedups score events by it on import).
-_LOCAL_EVENT_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "local-manual-scoring-tool/score-event")
-
 Status = Literal["open", "skipped", "scored", "done"]
 
 STATUS_OPEN: Status = "open"
@@ -444,24 +439,17 @@ def new_local_event_uuid() -> str:
     return str(uuid.uuid4())
 
 
-def local_event_uuid_of(entry: SavedScore, sample_id: str) -> str:
-    """The stable ``local_event_uuid`` for a history entry.
+def local_event_uuid_of(entry: SavedScore) -> str:
+    """The ``local_event_uuid`` stored on a finalized history entry.
 
-    Returns the stored ``score.metadata.local_event_uuid`` when it's a non-empty
-    string. Otherwise (pre-feature entries) derives a deterministic uuid5 from
-    the sample id + author + scored_at + value so repeated exports of the same
-    entry resolve to the same id.
+    Every finalized score is tagged with a ``local_event_uuid`` at submit time
+    (see :func:`new_local_event_uuid`). A missing one means malformed data, so we
+    fail fast rather than emit a score event the DB can't link.
     """
-    score = entry.get("score") or {}
-    meta = score.get("metadata") or {}
-    stored = meta.get("local_event_uuid")
-    if isinstance(stored, str) and stored:
-        return stored
-    author = meta.get("author") or entry.get("scorer") or ""
-    scored_at = meta.get("scored_at") or entry.get("saved_at") or ""
-    value = score.get("value")
-    name = f"{sample_id}|{author}|{scored_at}|{value}"
-    return str(uuid.uuid5(_LOCAL_EVENT_NAMESPACE, name))
+    stored = ((entry.get("score") or {}).get("metadata") or {}).get("local_event_uuid")
+    if not isinstance(stored, str) or not stored:
+        raise ValueError("history entry is missing score.metadata.local_event_uuid")
+    return stored
 
 
 def add_invalidation(
@@ -513,7 +501,7 @@ def invalidated_local_uuids(score_file: ScoreFile | None) -> set[str]:
 # ---------------------------------------------------------------------------
 
 
-def build_score_event(entry: SavedScore, sample_id: str) -> dict[str, Any]:
+def build_score_event(entry: SavedScore) -> dict[str, Any]:
     """Build a ``score`` event line from a history entry (no I/O).
 
     Preserves the existing score payload + metadata and ensures
@@ -526,7 +514,7 @@ def build_score_event(entry: SavedScore, sample_id: str) -> dict[str, Any]:
         "scorer": entry.get("scorer") or MANUAL_SCORE_SCORER,
         "score": {
             **score,
-            "metadata": {**meta, "local_event_uuid": local_event_uuid_of(entry, sample_id)},
+            "metadata": {**meta, "local_event_uuid": local_event_uuid_of(entry)},
         },
     }
 
@@ -547,15 +535,16 @@ def build_invalidation_event(inv: InvalidationRecord) -> dict[str, Any]:
             "provenance": {
                 "author": inv.get("author", ""),
                 "reason": inv.get("reason", ""),
+                "invalidated_at": inv.get("invalidated_at", ""),
                 "metadata": {"tool": "local-manual-scoring-tool"},
             },
         },
     }
 
 
-def score_log_lines(score_file: ScoreFile, sample_id: str) -> list[dict[str, Any]]:
+def score_log_lines(score_file: ScoreFile) -> list[dict[str, Any]]:
     """All score-log event lines for one sample: score events then invalidations."""
-    return [build_score_event(e, sample_id) for e in score_file["history"]] + [
+    return [build_score_event(e) for e in score_file["history"]] + [
         build_invalidation_event(inv) for inv in (score_file.get("invalidations") or [])
     ]
 

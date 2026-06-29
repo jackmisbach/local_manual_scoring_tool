@@ -34,6 +34,7 @@ def _entry(value: float, minutes: float = 7.0, author: str = SCORER) -> SavedSco
                 "author": author,
                 "minutes_spent_scoring": minutes,
                 "scored_at": "2026-06-25T00:00:00Z",
+                "local_event_uuid": f"evt-{value}",
             },
         },
     }
@@ -72,7 +73,7 @@ def test_export_score_events_per_history_entry(tmp_path: Path) -> None:
         assert line["event_type"] == "score"
         assert line["scorer"] == "manual_score"
         meta = line["score"]["metadata"]  # type: ignore[index]
-        # Every score event carries a (derived, here) local_event_uuid.
+        # Every score event carries its stored local_event_uuid.
         assert isinstance(meta["local_event_uuid"], str)  # type: ignore[index]
         assert meta["local_event_uuid"]  # type: ignore[index]
     assert [line["score"]["value"] for line in lines] == [0.4, 0.9]  # type: ignore[index]

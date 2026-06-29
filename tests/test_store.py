@@ -13,8 +13,9 @@ All I/O is against a tmp dir, so these tests need no Docker, network, or Hawk.
 from __future__ import annotations
 
 import json
-import uuid
 from pathlib import Path
+
+import pytest
 
 from scoring.store import (
     HISTORY_FILENAME,
@@ -229,22 +230,17 @@ def test_clear_finished_drops_timestamp(tmp_path: Path) -> None:
 def test_local_event_uuid_of_returns_stored() -> None:
     entry = _entry(value=0.6)
     entry["score"]["metadata"]["local_event_uuid"] = "stored-uuid"
-    assert local_event_uuid_of(entry, UUID) == "stored-uuid"
+    assert local_event_uuid_of(entry) == "stored-uuid"
 
 
-def test_local_event_uuid_of_derives_stably_when_absent() -> None:
-    """A pre-feature entry (no stored uuid) derives a stable, valid uuid5."""
+def test_local_event_uuid_of_absent_raises() -> None:
+    """No stored uuid -> ValueError (finalized scores must be tagged)."""
     entry = _entry(value=0.6)
-    first = local_event_uuid_of(entry, UUID)
-    second = local_event_uuid_of(entry, UUID)
-    assert first == second  # deterministic
-    # A valid uuid string.
-    uuid.UUID(first)
-    # Empty stored value also falls through to the derivation.
+    with pytest.raises(ValueError, match="local_event_uuid"):
+        local_event_uuid_of(entry)
     entry["score"]["metadata"]["local_event_uuid"] = ""
-    assert local_event_uuid_of(entry, UUID) == first
-    # A different sample id yields a different derived uuid.
-    assert local_event_uuid_of(entry, "other-sample") != first
+    with pytest.raises(ValueError, match="local_event_uuid"):
+        local_event_uuid_of(entry)
 
 
 # --- invalidations --------------------------------------------------------
@@ -273,19 +269,25 @@ def test_invalidated_local_uuids_none() -> None:
 
 def test_build_score_event_shape() -> None:
     entry = _entry(value=0.6, minutes=15)
-    event = build_score_event(entry, UUID)
+    entry["score"]["metadata"]["local_event_uuid"] = "evt-xyz"
+    event = build_score_event(entry)
     assert event["event_type"] == "score"
     assert event["scorer"] == "manual_score"
     meta = event["score"]["metadata"]
-    # Preserves existing metadata and ensures local_event_uuid is set.
+    # Preserves existing metadata and carries the stored local_event_uuid.
     assert meta["author"] == SCORER
     assert meta["minutes_spent_scoring"] == 15
-    assert meta["local_event_uuid"] == local_event_uuid_of(entry, UUID)
+    assert meta["local_event_uuid"] == "evt-xyz"
 
 
 def test_build_invalidation_event_shape() -> None:
     event = build_invalidation_event(
-        {"local_target_event_uuid": "evt-1", "author": SCORER, "reason": "wrong"}
+        {
+            "local_target_event_uuid": "evt-1",
+            "author": SCORER,
+            "reason": "wrong",
+            "invalidated_at": "2026-01-02T03:04:05Z",
+        }
     )
     assert event["event_type"] == "info"
     assert event["info_source"] == "event_invalidation"
@@ -294,6 +296,7 @@ def test_build_invalidation_event_shape() -> None:
     prov = event["info_data"]["provenance"]
     assert prov["author"] == SCORER
     assert prov["reason"] == "wrong"
+    assert prov["invalidated_at"] == "2026-01-02T03:04:05Z"
     assert prov["metadata"]["tool"] == "local-manual-scoring-tool"
 
 

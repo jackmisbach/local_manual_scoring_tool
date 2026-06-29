@@ -565,15 +565,6 @@
                 cursor: pointer;
                 font-family: inherit;
             }
-            .local-history-info {
-                background: #e7f3ff;
-                border: 1px solid #91c8ff;
-                border-radius: 6px;
-                padding: 12px 16px;
-                margin-bottom: 16px;
-                color: #1c3d5a;
-                font-size: 0.9em;
-            }
             .stash-info {
                 background: #e7f3ff;
                 border: 1px solid #91c8ff;
@@ -1118,17 +1109,6 @@
             </span>
             <button type="button" id="restore-stash-btn" onclick="restoreStash()">Restore</button>
             <button type="button" id="drop-stash-btn" onclick="dropStash()">Drop</button>
-        </div>
-        <div
-            class="stash-info local-history-info"
-            id="local-history-info"
-            {% if not has_local_history %}style="display: none"{% endif %}
-        >
-            <span class="stash-text">
-                <strong>You already scored this sample.</strong> Submitting appends a new ScoreEvent
-                &mdash; see <em>Your scores for this sample</em> above.
-            </span>
-            <button type="button" id="reload-history-btn" onclick="reloadHistory()">Load most-invested into form</button>
         </div>
         {% endif %}
 
@@ -2546,18 +2526,6 @@
                     return;
                 }
 
-                const minutesInput = fieldEl("minutes_to_score");
-                const currentMinutes = parseFloat(minutesInput && minutesInput.value);
-                let warning = "";
-                if (
-                    priorMaxMinutes !== null
-                    && !isNaN(currentMinutes)
-                    && currentMinutes <= priorMaxMinutes
-                ) {
-                    warning = `\n\nWarning: You previously submitted with ${priorMaxMinutes} minutes to score.`;
-                }
-                if (!confirm(`Submit score of ${value} with ${currentMinutes} minutes to score?${warning}`)) return;
-
                 btn.disabled = true;
                 btn.textContent = "Submitting...";
                 hideResult();
@@ -2593,7 +2561,6 @@
                         // the time-rich prior submission in the Reload
                         // button.
                         hasLocalHistory = true;
-                        setHistoryBannerVisible(true);
                         // Live-update the header progress bar: the page
                         // doesn't reload after submit (form stays editable),
                         // so the server returns fresh counts and we patch
@@ -2870,11 +2837,6 @@
                 if (el) el.style.display = visible ? "" : "none";
             }
 
-            function setHistoryBannerVisible(visible) {
-                const el = document.getElementById("local-history-info");
-                if (el) el.style.display = visible ? "" : "none";
-            }
-
             // Clear every tracked input. Synthetic input events re-fire the
             // button-sync listeners that watch the fields, so dependent UI
             // stays in sync.
@@ -2978,14 +2940,6 @@
             // Stash banner: pull the on-disk draft back into the form.
             function restoreStash() {
                 fillFormFromSource(currentStash);
-            }
-
-            // History banner: pull the submission with the highest
-            // ``minutes_spent_scoring`` back into the form. Useful after
-            // a tweak you want to roll back to the entry you spent the
-            // most time on.
-            function reloadHistory() {
-                fillFormFromSource(mostInvestedHistory);
             }
 
             // Mirror of tracking.most_invested_entry_for_scorer for the

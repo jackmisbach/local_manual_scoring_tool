@@ -43,14 +43,6 @@ This (re)builds `data/samples/output_score_logs/<sample>/score_log.jsonl` — on
 event log per sample (your score events plus any invalidations) — and zips them
 all into `data/samples/output_scores.zip`.
 
-### Invalidating a score
-
-In the **Your scores** side panel, click the **×** on a score entry to invalidate
-it (you'll be asked for an optional reason). Invalidated scores are struck through
-and recorded as invalidation events in that sample's `score_log.jsonl`, so they
-ride along in the export for us to reconcile.
-
-
 ## Extras
 
 ### Config

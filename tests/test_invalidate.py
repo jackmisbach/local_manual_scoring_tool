@@ -8,9 +8,9 @@ Hawk.
 
 from __future__ import annotations
 
-import uuid as uuid_mod
 from pathlib import Path
 
+import pytest
 from flask.testing import FlaskClient
 
 from scoring.store import SavedScore, load_score_file, local_event_uuid_of
@@ -78,13 +78,11 @@ def test_scores_returns_invalidated_and_entry_uuids(client: FlaskClient, samples
     assert scores["entries"][0]["local_event_uuid"] == target
 
 
-def test_local_event_uuid_of_stored_vs_derived() -> None:
-    """The store helper returns the stored uuid when present, else a stable uuid5."""
+def test_local_event_uuid_of_stored_else_raises() -> None:
+    """The store helper returns the stored uuid when present, else raises."""
     stored = _entry()
     stored["score"]["metadata"]["local_event_uuid"] = "explicit"
-    assert local_event_uuid_of(stored, SAMPLE_UUID) == "explicit"
+    assert local_event_uuid_of(stored) == "explicit"
 
-    derived = _entry()
-    first = local_event_uuid_of(derived, SAMPLE_UUID)
-    assert first == local_event_uuid_of(derived, SAMPLE_UUID)
-    uuid_mod.UUID(first)  # valid uuid
+    with pytest.raises(ValueError, match="local_event_uuid"):
+        local_event_uuid_of(_entry())

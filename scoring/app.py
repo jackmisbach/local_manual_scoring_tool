@@ -223,25 +223,22 @@ def _score_event_to_form(saved: SavedScore | None) -> ScoreFormData | None:
     return form
 
 
-def _saved_score_for_template(
-    saved: SavedScore | None,
-    sample_id: str | None = None,
-) -> dict[str, Any] | None:
+def _saved_score_for_template(saved: SavedScore | None) -> dict[str, Any] | None:
     """Render a SavedScore for the template/JS by exposing a flat form view.
 
     The template's pre-fill JS reads the flat value/explanation/minutes
     fields. We attach them alongside the raw ScoreEvent payload so
-    client-side dedup + the "prior scores" panel can pull whichever they need.
-
-    When ``sample_id`` is given, also expose the resolved ``local_event_uuid``
-    (stored or derived) so the client can invalidate this exact entry.
+    client-side dedup + the "prior scores" panel can pull whichever they need,
+    plus the entry's ``local_event_uuid`` so the client can invalidate it.
     """
     if saved is None:
         return None
     form = _score_event_to_form(saved) or {}
     out: dict[str, Any] = {**saved, **form}
-    if sample_id is not None:
-        out["local_event_uuid"] = local_event_uuid_of(saved, sample_id)
+    # Drafts (the stash) carry no local_event_uuid — only finalized scores do —
+    # so attach it only when present (local_event_uuid_of raises otherwise).
+    if ((saved.get("score") or {}).get("metadata") or {}).get("local_event_uuid"):
+        out["local_event_uuid"] = local_event_uuid_of(saved)
     return out
 
 
@@ -429,9 +426,9 @@ def create_app(
             scoring_instructions_label=(
                 (info["task_name"].split("/")[-1] or "Task") + " scoring instructions"
             ),
-            stash=_saved_score_for_template(stash, sample_id=uuid),
-            most_invested_history=_saved_score_for_template(most_invested_history, sample_id=uuid),
-            history_entries=[_saved_score_for_template(e, sample_id=uuid) for e in history_entries],
+            stash=_saved_score_for_template(stash),
+            most_invested_history=_saved_score_for_template(most_invested_history),
+            history_entries=[_saved_score_for_template(e) for e in history_entries],
             has_local_history=has_local_history,
             has_stash=has_stash,
             finish_recorded=finish_recorded,
@@ -668,7 +665,7 @@ def create_app(
         return jsonify(
             success=True,
             has_next=has_next,
-            saved_entry=_saved_score_for_template(entry, sample_id=uuid),
+            saved_entry=_saved_score_for_template(entry),
             score_path=str(history_path(samples_dir)),
             queue_done=queue_done,
             queue_skipped=queue_skipped,
@@ -726,7 +723,7 @@ def create_app(
             success=True,
             uuid=uuid,
             scorer_email=scorer_email,
-            entries=[_saved_score_for_template(e, sample_id=uuid) for e in entries],
+            entries=[_saved_score_for_template(e) for e in entries],
             invalidated=sorted(invalidated_local_uuids(score_file)),
             finished_at=(score_file or {}).get("finished_at"),
         )
