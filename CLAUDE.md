@@ -35,8 +35,7 @@ Key invariants (do not reintroduce what was stripped):
   (`_setup_sample`), and `advance_to_next`. Also routes the `config` and
   `export` subcommands.
 - `scoring/app.py` — `create_app()`: Flask routes / JSON API for the scoring UI
-  (scoring page, submit, skip, done, invalidate, timers, task
-  selection, exit).
+  (scoring page, submit, skip, done, invalidate, timers, exit).
 - `scoring/state.py` — TypedDicts for the shared `ScoringState` / `QueueEntry` /
   `SampleInfo`, plus `sample.json` loading (`load_sample_json`,
   `local_sample_info`). Recognized `sample.json` keys: `task` (or `task_name`),
@@ -61,10 +60,8 @@ Key invariants (do not reintroduce what was stripped):
   `~/.config/local-manual-scoring-tool/config.json` (honors `$XDG_CONFIG_HOME`),
   the resolved accessors (samples/images dir, scorer, guidance URLs), and the
   `config show|path|edit|set|unset` subcommand.
-- `scoring/task_selection.py` — global per-task enable/disable map, persisted in
-  the user config under `task_selection`.
 - `scoring/templates/` — Jinja templates: `scoring.html` (main UI),
-  `summary.html` (end-of-queue), `task_selection.html`, `broken.html`, partials.
+  `summary.html` (end-of-queue), `broken.html`, partials.
 
 ## Data layout
 

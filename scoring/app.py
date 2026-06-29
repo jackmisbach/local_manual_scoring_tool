@@ -74,7 +74,6 @@ from scoring.store import (
     set_skipped,
     stash_matches_submission,
 )
-from scoring.task_selection import load_selection, save_selection
 
 
 def _validate_bounded_float(
@@ -306,7 +305,6 @@ def create_app(
     state: ScoringState,
     lock: threading.Lock,
     advance_fn: Callable[[], AdvanceResult],
-    rebuild_queue_fn: Callable[[], None],
 ) -> Flask:
     app = Flask(__name__)
     md = MarkdownIt("default")
@@ -337,7 +335,6 @@ def create_app(
     @app.route("/")
     def index() -> ResponseReturnValue:
         with lock:
-            pending_selection = state.get("pending_task_selection", False)
             pending_summary = state.get("pending_summary", False)
             uuid = state["uuid"]
             info = state["info"]
@@ -350,17 +347,11 @@ def create_app(
             samples_dir = state["samples_dir"]
             scorer_email = state["scorer_email"]
 
-        if pending_selection:
-            # Defer the config-changes drain so the modal save itself
-            # (a config mutation) gets included in the banner shown on the
-            # subsequent scoring-page render.
-            return render_template("task_selection.html", standalone=True)
-        # An empty queue means "nothing to score" — for example after the user
-        # deselects every task with pending samples, or when the selected tasks
-        # contain only samples that aren't set up for manual scoring. /summary
-        # renders that state clearly and runs its own drain. pending_summary
-        # covers the startup case where the whole eval set was already
-        # processed; cleared by /api/navigate once the user picks a row to open.
+        # An empty queue means "nothing to score" — for example when the
+        # samples aren't set up for manual scoring. /summary renders that state
+        # clearly and runs its own drain. pending_summary covers the startup
+        # case where the whole eval set was already processed; cleared by
+        # /api/navigate once the user picks a row to open.
         if not queue or pending_summary:
             return redirect("/summary")
         # Pre-fill the form from the on-disk score file. Stash takes
@@ -439,79 +430,6 @@ def create_app(
             cli_no_container=cli_no_container,
             config_changes=config_changes,
         )
-
-    @app.route("/tasks")
-    def task_selection_page() -> ResponseReturnValue:
-        """Standalone reopenable task-selection page (footer "Tasks…" button).
-
-        Distinct from the auto-shown modal at startup: ``standalone=False``
-        lets the template show a Cancel button so the user can back out
-        without changing their selection. Renders even when this session
-        has no tasks to choose from — the template shows a "No tasks
-        found" message in that case, which is more helpful than a 400.
-        """
-        return render_template("task_selection.html", standalone=False)
-
-    @app.route("/api/tasks", methods=["GET"])
-    def get_tasks() -> ResponseReturnValue:
-        """Global task selection state for the modal.
-
-        Returns each task in the current session (union across every
-        eval-set we opened), with the per-task sample count and the
-        user's stored decision. Tasks the user has never decided on
-        default to selected, matching the modal's first-appearance UX.
-        """
-        with lock:
-            all_tasks = list(state["all_tasks"])
-            task_counts = dict(state["task_counts"])
-
-        selection = load_selection()
-        unseen: list[str] = []
-        tasks_payload: list[dict[str, Any]] = []
-        for name in all_tasks:
-            is_unseen = name not in selection
-            if is_unseen:
-                unseen.append(name)
-            tasks_payload.append(
-                {
-                    "name": name,
-                    "sample_count": task_counts.get(name, 0),
-                    # First-appearance default per the spec: all-selected so
-                    # the existing flow stays unchanged for users who don't
-                    # opt in.
-                    "selected": selection.get(name, True),
-                    "unseen": is_unseen,
-                }
-            )
-
-        return jsonify(tasks=tasks_payload, unseen=unseen)
-
-    @app.route("/api/tasks", methods=["POST"])
-    def post_tasks() -> ResponseReturnValue:
-        """Persist the global task selection and rebuild the queue.
-
-        Body: ``{"tasks": {"<task_name>": true|false, ...}}``. Saves to the
-        per-user config so the same decision carries to every later
-        eval-set the user opens; ``rebuild_queue_fn`` re-runs the score
-        check against the updated selection.
-        """
-        data = request.get_json()
-        if not isinstance(data, dict):
-            return jsonify(success=False, error="Invalid request"), 400
-        tasks = data.get("tasks")
-        if not isinstance(tasks, dict):
-            return jsonify(success=False, error="Missing tasks map"), 400
-
-        normalized: dict[str, bool] = {str(k): bool(v) for k, v in tasks.items()}
-        save_selection(normalized)
-
-        rebuild_queue_fn()
-
-        # The selection step records the user's intent; whether the resulting
-        # queue is empty (e.g. all selected tasks are already scored, or
-        # their samples aren't set up for manual scoring) is the index
-        # route's concern — it redirects to /summary in that case.
-        return jsonify(success=True)
 
     @app.route("/api/setup-status")
     def setup_status() -> ResponseReturnValue:

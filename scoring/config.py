@@ -42,7 +42,6 @@ _DISCOVERABLE_DEFAULTS: dict[str, object] = {
     "browser_command": "",
     CLEAR_ON_SUBMIT_KEY: CLEAR_ON_SUBMIT_DEFAULT,
     "pause_timer_hotkey": PAUSE_TIMER_HOTKEY_DEFAULT,
-    "task_selection": {},
 }
 
 
@@ -57,8 +56,6 @@ class UserConfig(TypedDict):
     browser_command: NotRequired[str]
     clear_on_submit: NotRequired[ClearOnSubmit]
     pause_timer_hotkey: NotRequired[str]
-    # Global task selection: task_name -> selected.
-    task_selection: NotRequired[dict[str, bool]]
     # Pending change descriptions waiting to be shown in the UI startup banner.
     changed: NotRequired[list[str]]
 
@@ -154,24 +151,6 @@ def format_scalar_change(key: str, value: object) -> str:
         "pause_timer_hotkey": "Pause-timer hotkey",
     }.get(key, key)
     return f"{label}: {value}"
-
-
-def format_task_selection_changes(old: dict[str, bool], new: dict[str, bool]) -> list[str]:
-    """Summarize task_selection diffs as up to two lines for the banner."""
-    selected: list[str] = []
-    deselected: list[str] = []
-    for name, value in new.items():
-        if old.get(name) == value:
-            continue
-        (selected if value else deselected).append(name)
-    selected.sort()
-    deselected.sort()
-    messages: list[str] = []
-    if selected:
-        messages.append(f"Selected tasks: {', '.join(selected)}")
-    if deselected:
-        messages.append(f"Deselected tasks: {', '.join(deselected)}")
-    return messages
 
 
 # ---------------------------------------------------------------------------
@@ -278,9 +257,9 @@ def open_url_in_browser(url: str) -> None:
 # ---------------------------------------------------------------------------
 
 # Flat scalar keys settable via `config set KEY VALUE`, derived from
-# `_DISCOVERABLE_DEFAULTS` (dict insertion order) minus `task_selection`, which is
-# UI-managed (not set via the flat form).
-_NESTED_CONFIG_KEYS = frozenset({"task_selection"})
+# `_DISCOVERABLE_DEFAULTS` (dict insertion order). No nested (UI-managed) keys
+# remain, so this set is empty.
+_NESTED_CONFIG_KEYS: frozenset[str] = frozenset()
 CONFIG_KEYS: tuple[str, ...] = tuple(
     key for key in _DISCOVERABLE_DEFAULTS if key not in _NESTED_CONFIG_KEYS
 )

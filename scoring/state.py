@@ -103,15 +103,8 @@ class ScoringState(TypedDict):
     skipped: set[str]
     include_skipped: bool
     include_done: bool
-    # Task universe for the Tasks… selection modal: every task name seen across
-    # the sample dirs, plus per-task sample counts.
-    all_tasks: list[str]
-    task_counts: dict[str, int]
     # Set when startup found nothing to score; the app redirects to /summary.
     pending_summary: NotRequired[bool]
-    # Set when at least one task is unrecorded in the local selection file; the
-    # app renders the Task Selection modal until the user saves.
-    pending_task_selection: NotRequired[bool]
     # Set by /api/exit before spawning the exit daemon so late mutating POSTs
     # are rejected with 503.
     exiting: NotRequired[bool]

@@ -94,8 +94,6 @@ def _build_state(samples_dir: Path) -> ScoringState:
         "skipped": set(),
         "include_skipped": False,
         "include_done": False,
-        "all_tasks": [SAMPLE_TASK],
-        "task_counts": {SAMPLE_TASK: 1},
     }
     return state
 
@@ -111,7 +109,6 @@ def _make_client(state: ScoringState) -> FlaskClient:
         state=state,
         lock=lock,
         advance_fn=lambda: "advanced",
-        rebuild_queue_fn=lambda: None,
     )
     flask_app.config.update(TESTING=True)
     return flask_app.test_client()

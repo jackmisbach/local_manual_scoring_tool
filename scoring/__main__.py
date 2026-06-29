@@ -62,7 +62,6 @@ from scoring.store import (
     migrate_legacy_history_file,
     queue_summary_fields,
 )
-from scoring.task_selection import load_selection
 
 logger = logging.getLogger(__name__)
 
@@ -136,26 +135,17 @@ def build_local_queue(
     *,
     include_skipped: bool = False,
     include_done: bool = False,
-    task_selection: dict[str, bool] | None = None,
 ) -> list[QueueEntry]:
     """Build the scoring queue from local sample dirs and the on-disk store.
 
     Status is derived from each sample's score file plus the ``skipped`` set
     (see :func:`derive_queue_status`). ``include_skipped`` / ``include_done``
-    re-surface skipped / finished samples as navigable. A ``task_selection``
-    drops samples whose (known) task is deselected.
+    re-surface skipped / finished samples as navigable.
     """
     queue: list[QueueEntry] = []
     for uuid in sample_ids:
         data = load_sample_json(samples_dir, uuid)
         task_name = sample_task_name(data)
-        if (
-            task_selection is not None
-            and task_name
-            and task_name in task_selection
-            and not task_selection[task_name]
-        ):
-            continue
         score_file = load_score_file(samples_dir, uuid)
         summary_fields = queue_summary_fields(score_file)
         status = derive_queue_status(
@@ -172,19 +162,6 @@ def build_local_queue(
         }
         queue.append(entry)
     return shuffle_within_groups(queue)
-
-
-def scan_task_universe(
-    samples_dir: Path, sample_ids: list[str]
-) -> tuple[list[str], dict[str, int]]:
-    """Return (sorted task names, per-task sample counts) across the sample dirs."""
-    counts: dict[str, int] = {}
-    for uuid in sample_ids:
-        tn = sample_task_name(load_sample_json(samples_dir, uuid))
-        if not tn:
-            continue
-        counts[tn] = counts.get(tn, 0) + 1
-    return sorted(counts), counts
 
 
 # ---------------------------------------------------------------------------
@@ -312,55 +289,6 @@ def advance_to_next(state: ScoringState, lock: threading.Lock) -> AdvanceResult:
     return "advanced"
 
 
-def rebuild_queue_after_selection(state: ScoringState, lock: threading.Lock) -> None:
-    """Rebuild the queue with the current task selection; reset to first pending."""
-    stop_all_scoring_containers()
-    with lock:
-        samples_dir = state["samples_dir"]
-        sample_ids = list(state["sample_ids"])
-        include_skipped = state["include_skipped"]
-        include_done = state["include_done"]
-
-    selection = load_selection()
-    skipped = load_skipped(samples_dir)
-    queue = build_local_queue(
-        samples_dir,
-        sample_ids,
-        skipped,
-        include_skipped=include_skipped,
-        include_done=include_done,
-        task_selection=selection or None,
-    )
-    current_idx = next((i for i, s in enumerate(queue) if s["status"] == "open"), 0)
-    if queue:
-        first_uuid = queue[current_idx]["uuid"]
-        info = local_sample_info(first_uuid, samples_dir)
-        container_name = f"manual-score-{first_uuid[:12]}"
-        setup_status = "starting"
-    else:
-        first_uuid = ""
-        info = stub_sample_info()
-        container_name = ""
-        setup_status = "idle"
-
-    all_tasks, task_counts = scan_task_universe(samples_dir, sample_ids)
-
-    with lock:
-        state["queue"] = queue
-        state["all_tasks"] = all_tasks
-        state["task_counts"] = task_counts
-        state["current_idx"] = current_idx
-        state["uuid"] = first_uuid
-        state["info"] = info
-        state["container_name"] = container_name
-        state["setup_state"] = {"status": setup_status}
-        state["skipped"] = skipped
-        state.pop("pending_task_selection", None)
-
-    if queue:
-        threading.Thread(target=state["setup_fn"], daemon=True).start()
-
-
 # ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------
@@ -395,21 +323,13 @@ def _build_state(args: argparse.Namespace, scorer_email: str) -> ScoringState | 
         return None
 
     skipped = load_skipped(samples_root)
-    selection = load_selection()
     queue = build_local_queue(
         samples_root,
         sample_ids,
         skipped,
         include_skipped=args.include_skipped,
         include_done=args.include_done,
-        task_selection=selection or None,
     )
-    if not queue:
-        print(
-            "All samples are filtered out by your task selection."
-            " Use the Tasks button in the UI to re-enable tasks.",
-            file=sys.stderr,
-        )
 
     skipped_count = sum(1 for s in queue if s["status"] == "skipped")
     done = sum(1 for s in queue if s["status"] == "done")
@@ -435,7 +355,6 @@ def _build_state(args: argparse.Namespace, scorer_email: str) -> ScoringState | 
     current_idx = next((i for i, s in enumerate(queue) if s["status"] == "open"), 0)
     first_uuid = queue[current_idx]["uuid"] if queue else ""
     info = local_sample_info(first_uuid, samples_root) if first_uuid else stub_sample_info()
-    all_tasks, task_counts = scan_task_universe(samples_root, sample_ids)
 
     state: ScoringState = {
         "queue": queue,
@@ -456,8 +375,6 @@ def _build_state(args: argparse.Namespace, scorer_email: str) -> ScoringState | 
         "skipped": skipped,
         "include_skipped": args.include_skipped,
         "include_done": args.include_done,
-        "all_tasks": all_tasks,
-        "task_counts": task_counts,
     }
     if no_pending:
         state["pending_summary"] = True
@@ -469,7 +386,7 @@ def _run_app(args: argparse.Namespace, state: ScoringState, lock: threading.Lock
 
     state["setup_fn"] = lambda: _setup_sample(state, lock)
 
-    if not state.get("pending_task_selection") and not state.get("pending_summary"):
+    if not state.get("pending_summary"):
         threading.Thread(target=state["setup_fn"], daemon=True).start()
 
     from scoring.app import create_app
@@ -478,7 +395,6 @@ def _run_app(args: argparse.Namespace, state: ScoringState, lock: threading.Lock
         state=state,
         lock=lock,
         advance_fn=lambda: advance_to_next(state, lock),
-        rebuild_queue_fn=lambda: rebuild_queue_after_selection(state, lock),
     )
 
     base_url = f"http://localhost:{args.port}"
