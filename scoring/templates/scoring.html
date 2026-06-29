@@ -169,9 +169,6 @@
                 overflow: hidden;
                 padding: 12px 20px 16px;
             }
-            body.two-col [data-panel="score"] > .content {
-                height: var(--content-h, 500px);
-            }
             #score-form {
                 display: flex;
                 flex-direction: column;
@@ -797,15 +794,6 @@
                 flex: 0 0 auto;
                 margin-top: 12px;
             }
-            body.two-col .bottom-row {
-                display: flex;
-                gap: 16px;
-                align-items: stretch;
-            }
-            body.two-col .bottom-row > .section {
-                flex: 1 1 0;
-                min-width: 0;
-            }
         </style>
     </head>
     <body class="blinded">
@@ -892,23 +880,6 @@
             <h1 style="margin-bottom: 0">
                 <span data-info-field="title-task">{{ info.task_name }}{% if info.task_variant %} / {{ info.task_variant }}{% endif %}</span> / {{ uuid }}
             </h1>
-            <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap">
-                <label
-                    style="
-                        display: inline-flex;
-                        align-items: center;
-                        gap: 6px;
-                        font-size: 0.85em;
-                        font-weight: normal;
-                        cursor: pointer;
-                        color: #444;
-                        white-space: nowrap;
-                    "
-                >
-                    <input type="checkbox" id="two-col-toggle" />
-                    2-column layout
-                </label>
-            </div>
         </div>
         </header>
 
@@ -2830,7 +2801,7 @@
         </script>
         <script>
             const LAYOUT_KEY = "manualScoringLayoutV1";
-            const layoutState = { twoCol: false, contentHeights: {} };
+            const layoutState = { contentHeights: {} };
             try {
                 Object.assign(layoutState, JSON.parse(localStorage.getItem(LAYOUT_KEY) || "{}"));
             } catch {}
@@ -2848,7 +2819,6 @@
             }
 
             function applyLayout() {
-                document.body.classList.toggle("two-col", layoutState.twoCol);
                 // Restore each panel's saved height from its own resize bar.
                 document.querySelectorAll("[data-panel]").forEach((panel) => {
                     const name = panel.dataset.panel;
@@ -2864,14 +2834,6 @@
                     }
                 });
             }
-
-            const toggle = document.getElementById("two-col-toggle");
-            toggle.checked = layoutState.twoCol;
-            toggle.addEventListener("change", () => {
-                layoutState.twoCol = toggle.checked;
-                saveLayout();
-                applyLayout();
-            });
 
             document.querySelectorAll(".row-resizer").forEach((resizer) => {
                 resizer.addEventListener("mousedown", (e) => {
