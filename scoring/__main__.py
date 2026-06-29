@@ -7,13 +7,13 @@ Usage:
 SAMPLES_DIR is a directory whose immediate subdirectories are samples (each a
 ``<uuid>/`` containing a ``project/`` dir). You can also point directly at a
 single sample dir. Working/UI state (including each sample's score history) is
-written to ``<samples-dir>/history.jsonl``; the flat ``scores.jsonl`` export is
-generated on demand by ``local-manual-score export``. Container images are
-loaded on demand from ``<images-dir>/<task_name>.tar``.
+written to ``<samples-dir>/history.jsonl``; the per-sample score-log export
+(``output_scores.zip``) is generated on demand by ``local-manual-score export``.
+Container images are loaded on demand from ``<images-dir>/<task_name>.tar``.
 
 Subcommands:
     local-manual-score config ...           inspect/modify saved config
-    local-manual-score export [SAMPLES_DIR] (re)build scores.jsonl from history
+    local-manual-score export [SAMPLES_DIR] (re)build output_scores.zip from history
 """
 
 import argparse
@@ -37,7 +37,7 @@ from scoring.config import (
     resolve_samples_dir,
     resolve_scorer,
 )
-from scoring.export import export_scores
+from scoring.export import export_score_logs
 from scoring.infra import (
     ensure_task_image,
     open_vscode_in_container,
@@ -512,16 +512,17 @@ def _run_app(args: argparse.Namespace, state: ScoringState, lock: threading.Lock
 def export_main(argv: list[str]) -> None:
     """Handle ``local-manual-score export [SAMPLES_DIR]``.
 
-    Rebuilds ``<samples-dir>/scores.jsonl`` from ``history.jsonl`` history and
-    prints the written path plus the row count. Resolves the samples dir exactly
-    like the main command: the optional positional arg, else the
-    resolved/configured samples dir. No Flask, no Docker.
+    Rebuilds the per-sample score logs from ``history.jsonl`` history and zips
+    them to ``<samples-dir>/output_scores.zip``, printing the per-sample log
+    count and the written path. Resolves the samples dir exactly like the main
+    command: the optional positional arg, else the resolved/configured samples
+    dir. No Flask, no Docker.
     """
     parser = argparse.ArgumentParser(
         prog="local-manual-score export",
         description=(
-            "Generate scores.jsonl (the canonical flat export) from"
-            " history.jsonl history. Overwrites any existing file."
+            "Generate output_scores.zip (per-sample score_log.jsonl logs) from"
+            " history.jsonl history. Overwrites any existing export."
         ),
     )
     parser.add_argument(
@@ -540,10 +541,9 @@ def export_main(argv: list[str]) -> None:
     samples_root, _ = _resolve_targets(samples_dir)
     # Single-threaded entry: migrate any legacy working/UI state file first.
     migrate_legacy_history_file(samples_root)
-    path = export_scores(samples_root)
-    with path.open(encoding="utf-8") as f:
-        rows = sum(1 for line in f if line.strip())
-    print(f"Wrote {rows} row(s) to {path}")
+    path = export_score_logs(samples_root)
+    logs = sum(1 for _ in (samples_root / "output_score_logs").glob("*/score_log.jsonl"))
+    print(f"Wrote {logs} sample log(s); zipped to {path}")
 
 
 def main() -> None:

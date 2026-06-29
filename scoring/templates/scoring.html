@@ -434,6 +434,7 @@
                 gap: 6px;
             }
             .prior-scores-list li {
+                position: relative;
                 background: #fff;
                 border: 1px solid #d8e3ef;
                 border-radius: 4px;
@@ -442,6 +443,42 @@
                 flex-direction: column;
                 gap: 4px;
                 font-family: monospace;
+            }
+            .prior-scores-list li.ps-invalidated {
+                opacity: 0.55;
+            }
+            .prior-scores-list li.ps-invalidated .ps-header span,
+            .prior-scores-list li.ps-invalidated .ps-explanation {
+                text-decoration: line-through;
+            }
+            /* The "invalidated" badge itself shouldn't be struck through. */
+            .prior-scores-list li.ps-invalidated .badge-invalidated {
+                text-decoration: none;
+            }
+            .prior-scores-list .badge-invalidated {
+                background: #fee2e2;
+                color: #991b1b;
+                border: 1px solid #fca5a5;
+            }
+            .ps-invalidate-btn {
+                position: absolute;
+                top: 2px;
+                right: 4px;
+                width: 16px;
+                height: 16px;
+                line-height: 14px;
+                padding: 0;
+                border: none;
+                border-radius: 3px;
+                background: transparent;
+                color: #9ca3af;
+                font-size: 14px;
+                font-family: inherit;
+                cursor: pointer;
+            }
+            .ps-invalidate-btn:hover {
+                color: #dc2626;
+                background: #fef2f2;
             }
             .prior-scores-list .ps-header {
                 display: flex;
@@ -1442,6 +1479,11 @@
             // would return 400; we just front-run it for the UX). Updated
             // in place on every successful submit.
             const historyEntries = {{ history_entries | tojson }};
+            // Local event uuids of prior scores that have been invalidated for
+            // this sample. Drives the struck-through/disabled rendering in the
+            // prior-scores panel; mutated client-side after a successful
+            // /api/invalidate so the row updates without a reload.
+            const invalidatedSet = new Set({{ invalidated_uuids | tojson }});
             // Highest minutes_to_score from any prior submission by this
             // scorer's local history. Refreshed from the submit response so a
             // resubmit with lower minutes still warns.
@@ -2185,6 +2227,7 @@
                         : entry.explanation,
                     submitted: entry.submitted_to || "local",
                     when: entry.saved_at || meta.scored_at || "",
+                    localEventUuid: entry.local_event_uuid || meta.local_event_uuid || "",
                 };
             }
             function formatRelative(iso) {
@@ -2231,6 +2274,35 @@
                 exp.title = v.explanation || "";
                 exp.textContent = v.explanation || "";
                 li.append(header, exp);
+                // Submitted (non-draft) entries with a local_event_uuid can be
+                // invalidated. Drafts (stash) have no uuid and get no button.
+                if (!isDraft && v.localEventUuid) {
+                    const already = invalidatedSet.has(v.localEventUuid);
+                    if (already) {
+                        // An invalidated score renders muted/struck-through and
+                        // can't be re-invalidated — show a badge instead of the ×.
+                        li.classList.add("ps-invalidated");
+                        const inval = document.createElement("span");
+                        inval.className = "badge badge-invalidated";
+                        inval.textContent = "invalidated";
+                        inval.title = "This score has been invalidated";
+                        header.append(inval);
+                    } else {
+                        const btn = document.createElement("button");
+                        btn.type = "button";
+                        btn.className = "ps-invalidate-btn";
+                        btn.textContent = "×";
+                        btn.setAttribute("aria-label", "Invalidate this score");
+                        btn.title = "Invalidate this score";
+                        btn.addEventListener("click", (e) => {
+                            // Don't let the click bubble to the explanation
+                            // expand toggle on the li.
+                            e.stopPropagation();
+                            invalidateScore(v.localEventUuid);
+                        });
+                        li.append(btn);
+                    }
+                }
                 list.append(li);
                 // Only make the explanation clickable when it actually
                 // overflows — otherwise toggling .expanded is a no-op
@@ -2238,6 +2310,37 @@
                 if (exp.scrollWidth > exp.clientWidth) {
                     exp.classList.add("clickable");
                     exp.addEventListener("click", () => exp.classList.toggle("expanded"));
+                }
+            }
+
+            // Invalidate a submitted prior score by its local event uuid. Prompts
+            // for an optional reason; cancelling the prompt aborts. On success the
+            // uuid is added to invalidatedSet and the panel re-renders so the row
+            // shows as struck-through.
+            async function invalidateScore(localEventUuid) {
+                if (!localEventUuid) return;
+                const reason = window.prompt(
+                    "Reason for invalidating this score? (optional)", "");
+                if (reason === null) return;  // user cancelled
+                try {
+                    const resp = await fetch("/api/invalidate", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            local_event_uuid: localEventUuid,
+                            reason: reason,
+                        }),
+                    });
+                    const data = await resp.json();
+                    if (resp.ok && data.success) {
+                        invalidatedSet.add(localEventUuid);
+                        renderPriorScores();
+                        showToast("success", "Score invalidated");
+                    } else {
+                        showToast("error", data.error || "Invalidate failed");
+                    }
+                } catch (e) {
+                    showToast("error", "Invalidate failed: " + e);
                 }
             }
 
@@ -2483,8 +2586,8 @@
                             "Score saved locally to " + pathLinkHtml(data.score_path) + ".");
                         showToast("success", "Score saved locally");
                         // data.score_path is history.jsonl (working/UI state);
-                        // scores.jsonl is generated on demand via the export
-                        // subcommand, not written on submit.
+                        // the output_scores.zip export is generated on demand via
+                        // the export subcommand, not written on submit.
                         // The server only drops the stash when the submitted
                         // entry exactly matches it; sync the banner to that
                         // decision so a stash that survived the submit stays
@@ -2813,8 +2916,8 @@
                     const data = await resp.json();
                     if (data.success) {
                         // data.score_path is history.jsonl, where the draft
-                        // persists (scores.jsonl is a generated export, not
-                        // touched by stashing).
+                        // persists (the output_scores.zip export is generated on
+                        // demand, not touched by stashing).
                         showResultHtml("success",
                             "Score stashed to " + pathLinkHtml(data.score_path) + ".");
                         // Snapshot what we just sent BEFORE clearing the

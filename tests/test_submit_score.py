@@ -9,8 +9,8 @@ There is no Hawk in this fork. A successful submit must:
   ``score.metadata``; and
 - append that entry to the sample's ``history`` (in ``history.jsonl``).
 
-It must NOT touch ``scores.jsonl`` — that's a generated export, rebuilt on
-demand by ``local-manual-score export`` (round-tripped in test_export.py).
+It must NOT write the score-log export — that's generated on demand by
+``local-manual-score export`` (round-tripped in test_export.py).
 
 The response carries the local ``score_path`` (where the score persisted —
 ``history.jsonl``). Input validation (the 400 surface and the all-optional
@@ -24,7 +24,7 @@ from typing import Any
 
 from flask.testing import FlaskClient
 
-from scoring.store import history_path, load_score_file, scores_path
+from scoring.store import history_path, load_score_file
 from tests.conftest import SAMPLE_UUID, SCORER_EMAIL
 
 
@@ -56,13 +56,17 @@ def test_submit_score_appends_history_entry(client: FlaskClient, samples_dir: Pa
     assert isinstance(meta.get("scoring_version"), str)
     # scored_at is decision-time provenance kept in the local audit trail.
     assert isinstance(meta.get("scored_at"), str)
+    # Every finalized score is tagged with a fresh local event uuid.
+    assert isinstance(meta.get("local_event_uuid"), str)
+    assert meta["local_event_uuid"]
 
 
-def test_submit_score_does_not_write_scores_jsonl(client: FlaskClient, samples_dir: Path) -> None:
-    """scores.jsonl is a generated export — submit must not create/append it."""
+def test_submit_score_does_not_write_export(client: FlaskClient, samples_dir: Path) -> None:
+    """The score-log export is generated on demand — submit must not write it."""
     resp = client.post("/api/submit-score", json=_basic_form())
     assert resp.status_code == 200
-    assert not scores_path(samples_dir).exists()
+    assert not (samples_dir / "output_scores.zip").exists()
+    assert not (samples_dir / "scores.jsonl").exists()
 
 
 def test_submit_score_response_points_at_history(client: FlaskClient, samples_dir: Path) -> None:
@@ -82,6 +86,8 @@ def test_submit_score_includes_saved_entry_in_response(client: FlaskClient) -> N
     assert saved["scorer"] == "manual_score"
     assert saved["score"]["value"] == 0.7
     assert saved["value"] == 0.7
+    # The resolved local event uuid is exposed for the client to invalidate.
+    assert saved["local_event_uuid"] == saved["score"]["metadata"]["local_event_uuid"]
 
 
 def test_submit_score_rejects_duplicate_resubmit(client: FlaskClient) -> None:

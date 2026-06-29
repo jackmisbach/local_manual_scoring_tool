@@ -1,19 +1,21 @@
-"""Tests for the on-demand ``scores.jsonl`` export (scoring.export).
+"""Tests for the on-demand per-sample score-log export (scoring.export).
 
-``scores.jsonl`` is no longer written on submit; it is rebuilt from each
-sample's history in ``history.jsonl`` by :func:`scoring.export.export_scores`
-(and the ``local-manual-score export`` subcommand). These tests round-trip:
-submit/append several scores, run the export, and assert the flat rows match the
-underlying history. All I/O is against a tmp dir — no Docker, network, or Hawk.
+The export is no longer written on submit; it is rebuilt from each sample's
+history in ``history.jsonl`` by :func:`scoring.export.export_score_logs` (and the
+``local-manual-score export`` subcommand). These tests round-trip: append a few
+scores (and an invalidation), run the export, unzip ``output_scores.zip``, and
+assert the per-sample ``score_log.jsonl`` lines. All I/O is against a tmp dir —
+no Docker, network, or Hawk.
 """
 
 from __future__ import annotations
 
 import json
+import zipfile
 from pathlib import Path
 
-from scoring.export import export_scores
-from scoring.store import SCORES_FILENAME, SavedScore, append_history, set_skipped
+from scoring.export import export_score_logs
+from scoring.store import SavedScore, add_invalidation, append_history, set_skipped
 
 UUID_A = "aaaaaaaaaaaaaaaaaaaaaa"
 UUID_B = "bbbbbbbbbbbbbbbbbbbbbb"
@@ -37,85 +39,99 @@ def _entry(value: float, minutes: float = 7.0, author: str = SCORER) -> SavedSco
     }
 
 
-def _write_sample_json(root: Path, uuid: str, task: str) -> None:
-    sample_dir = root / uuid
-    (sample_dir / "project").mkdir(parents=True, exist_ok=True)
-    (sample_dir / "sample.json").write_text(json.dumps({"task": task}), encoding="utf-8")
+def _zip_lines(zip_path: Path, uuid: str) -> list[dict[str, object]]:
+    """Read the per-sample score_log.jsonl out of output_scores.zip."""
+    with zipfile.ZipFile(zip_path) as zf:
+        raw = zf.read(f"{uuid}/score_log.jsonl").decode("utf-8")
+    return [json.loads(line) for line in raw.splitlines() if line.strip()]
 
 
-def _rows(path: Path) -> list[dict[str, object]]:
-    lines = path.read_text(encoding="utf-8").splitlines()
-    return [json.loads(line) for line in lines if line.strip()]
+def _zip_names(zip_path: Path) -> set[str]:
+    """File entries in the zip (directory entries excluded)."""
+    with zipfile.ZipFile(zip_path) as zf:
+        return {name for name in zf.namelist() if not name.endswith("/")}
 
 
-def test_export_empty_writes_empty_file(tmp_path: Path) -> None:
-    """No history anywhere -> an empty (but present) scores.jsonl."""
-    path = export_scores(tmp_path)
-    assert path == tmp_path / SCORES_FILENAME
+def test_export_empty_writes_zip(tmp_path: Path) -> None:
+    """No history anywhere -> an empty (but present) output_scores.zip."""
+    path = export_score_logs(tmp_path)
+    assert path == tmp_path / "output_scores.zip"
     assert path.exists()
-    assert _rows(path) == []
+    assert _zip_names(path) == set()
 
 
-def test_export_one_row_per_history_entry(tmp_path: Path) -> None:
-    _write_sample_json(tmp_path, UUID_A, "demo")
+def test_export_score_events_per_history_entry(tmp_path: Path) -> None:
     append_history(tmp_path, UUID_A, _entry(0.4, minutes=10))
     append_history(tmp_path, UUID_A, _entry(0.9, minutes=20))
 
-    path = export_scores(tmp_path)
-    rows = _rows(path)
-    assert len(rows) == 2
-    for row in rows:
-        assert set(row) == {
-            "id",
-            "scorer",
-            "value",
-            "explanation",
-            "minutes_to_score",
-            "scored_at",
-            "task_name",
-        }
-        assert row["id"] == UUID_A
-        assert row["scorer"] == SCORER
-        assert row["task_name"] == "demo"
-    assert [r["value"] for r in rows] == [0.4, 0.9]
-    assert [r["minutes_to_score"] for r in rows] == [10, 20]
+    path = export_score_logs(tmp_path)
+    assert f"{UUID_A}/score_log.jsonl" in _zip_names(path)
+    lines = _zip_lines(path, UUID_A)
+    assert len(lines) == 2
+    for line in lines:
+        assert line["event_type"] == "score"
+        assert line["scorer"] == "manual_score"
+        meta = line["score"]["metadata"]  # type: ignore[index]
+        # Every score event carries a (derived, here) local_event_uuid.
+        assert isinstance(meta["local_event_uuid"], str)  # type: ignore[index]
+        assert meta["local_event_uuid"]  # type: ignore[index]
+    assert [line["score"]["value"] for line in lines] == [0.4, 0.9]  # type: ignore[index]
+
+
+def test_export_invalidation_event(tmp_path: Path) -> None:
+    append_history(tmp_path, UUID_A, _entry(0.4))
+    # Derive the score event's local uuid to target it.
+    score_line = _zip_lines(export_score_logs(tmp_path), UUID_A)[0]
+    target = score_line["score"]["metadata"]["local_event_uuid"]  # type: ignore[index]
+
+    add_invalidation(tmp_path, UUID_A, target, SCORER, "wrong value")
+    lines = _zip_lines(export_score_logs(tmp_path), UUID_A)
+    info = [line for line in lines if line["event_type"] == "info"]
+    assert len(info) == 1
+    line = info[0]
+    assert line["info_source"] == "event_invalidation"
+    info_data = line["info_data"]
+    assert info_data["target_event_uuid"] is None  # type: ignore[index]
+    assert info_data["local_target_event_uuid"] == target  # type: ignore[index]
+    prov = info_data["provenance"]  # type: ignore[index]
+    assert prov["author"] == SCORER  # type: ignore[index]
+    assert prov["reason"] == "wrong value"  # type: ignore[index]
+    assert prov["metadata"]["tool"] == "local-manual-scoring-tool"  # type: ignore[index]
 
 
 def test_export_spans_multiple_samples(tmp_path: Path) -> None:
-    _write_sample_json(tmp_path, UUID_A, "task_a")
-    _write_sample_json(tmp_path, UUID_B, "task_b")
     append_history(tmp_path, UUID_A, _entry(0.1))
     append_history(tmp_path, UUID_B, _entry(0.2))
     append_history(tmp_path, UUID_B, _entry(0.3))
 
-    rows = _rows(export_scores(tmp_path))
-    assert len(rows) == 3
-    by_id: dict[str, list[dict[str, object]]] = {}
-    for row in rows:
-        by_id.setdefault(str(row["id"]), []).append(row)
-    assert [r["value"] for r in by_id[UUID_A]] == [0.1]
-    assert [r["value"] for r in by_id[UUID_B]] == [0.2, 0.3]
-    assert {r["task_name"] for r in by_id[UUID_A]} == {"task_a"}
-    assert {r["task_name"] for r in by_id[UUID_B]} == {"task_b"}
+    path = export_score_logs(tmp_path)
+    assert _zip_names(path) == {
+        f"{UUID_A}/score_log.jsonl",
+        f"{UUID_B}/score_log.jsonl",
+    }
+    assert [line["score"]["value"] for line in _zip_lines(path, UUID_A)] == [0.1]  # type: ignore[index]
+    assert [line["score"]["value"] for line in _zip_lines(path, UUID_B)] == [0.2, 0.3]  # type: ignore[index]
 
 
-def test_export_is_idempotent_overwrite(tmp_path: Path) -> None:
-    """Re-running export overwrites rather than appending."""
-    _write_sample_json(tmp_path, UUID_A, "demo")
+def test_export_is_idempotent(tmp_path: Path) -> None:
+    """Re-running export rebuilds rather than appending."""
     append_history(tmp_path, UUID_A, _entry(0.5))
-    export_scores(tmp_path)
-    path = export_scores(tmp_path)
-    assert len(_rows(path)) == 1
+    export_score_logs(tmp_path)
+    path = export_score_logs(tmp_path)
+    assert len(_zip_lines(path, UUID_A)) == 1
 
 
-def test_export_ignores_skip_only_and_missing_task(tmp_path: Path) -> None:
-    """Skip-only samples contribute no rows; missing sample.json -> empty task."""
+def test_export_ignores_skip_only(tmp_path: Path) -> None:
+    """Skip-only samples contribute no score log."""
     set_skipped(tmp_path, UUID_B)  # skip-only record, no history
-    # UUID_A has history but no sample.json on disk.
-    (tmp_path / UUID_A / "project").mkdir(parents=True, exist_ok=True)
     append_history(tmp_path, UUID_A, _entry(0.7))
 
-    rows = _rows(export_scores(tmp_path))
-    assert len(rows) == 1
-    assert rows[0]["id"] == UUID_A
-    assert rows[0]["task_name"] == ""
+    path = export_score_logs(tmp_path)
+    assert _zip_names(path) == {f"{UUID_A}/score_log.jsonl"}
+
+
+def test_export_cleans_stale_scores_jsonl(tmp_path: Path) -> None:
+    """A leftover legacy scores.jsonl is removed by the export."""
+    (tmp_path / "scores.jsonl").write_text("stale\n", encoding="utf-8")
+    export_score_logs(tmp_path)
+    assert not (tmp_path / "scores.jsonl").exists()

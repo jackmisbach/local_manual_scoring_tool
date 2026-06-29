@@ -52,6 +52,7 @@ from scoring.store import (
     ScoreFile,
     ScoreFormData,
     TimerState,
+    add_invalidation,
     append_history,
     clear_finished,
     clear_stash,
@@ -61,11 +62,14 @@ from scoring.store import (
     has_history_for_scorer,
     history_for_scorer,
     history_path,
+    invalidated_local_uuids,
     last_activity_map,
     load_score_file,
     load_scratchpad,
     load_timer_state,
+    local_event_uuid_of,
     most_invested_entry_for_scorer,
+    new_local_event_uuid,
     now_iso,
     queue_summary_fields,
     save_scratchpad,
@@ -157,6 +161,7 @@ def _form_to_score_event(
     *,
     author_email: str,
     scored_at: str | None = None,
+    local_event_uuid: str | None = None,
 ) -> SavedScore:
     """Convert the form payload into a ScoreEvent-shaped SavedScore.
 
@@ -164,7 +169,8 @@ def _form_to_score_event(
     ``score.explanation`` and minutes_to_score into
     ``score.metadata.minutes_spent_scoring``. ``author``, ``scoring_version``,
     and ``scored_at`` are always written into metadata so a single ScoreEvent
-    is self-describing without consulting any other row.
+    is self-describing without consulting any other row. A ``local_event_uuid``
+    (passed only on finalized submits) is written into metadata too.
 
     Missing fields are simply not written into metadata, so the same builder
     serves both the finalized submit and the all-optional stash path.
@@ -177,6 +183,8 @@ def _form_to_score_event(
     }
     if "minutes_to_score" in form:
         metadata["minutes_spent_scoring"] = form["minutes_to_score"]
+    if local_event_uuid is not None:
+        metadata["local_event_uuid"] = local_event_uuid
 
     score: ScoreEventScore = {
         "answer": None,
@@ -217,17 +225,26 @@ def _score_event_to_form(saved: SavedScore | None) -> ScoreFormData | None:
     return form
 
 
-def _saved_score_for_template(saved: SavedScore | None) -> dict[str, Any] | None:
+def _saved_score_for_template(
+    saved: SavedScore | None,
+    sample_id: str | None = None,
+) -> dict[str, Any] | None:
     """Render a SavedScore for the template/JS by exposing a flat form view.
 
     The template's pre-fill JS reads the flat value/explanation/minutes
     fields. We attach them alongside the raw ScoreEvent payload so
     client-side dedup + the "prior scores" panel can pull whichever they need.
+
+    When ``sample_id`` is given, also expose the resolved ``local_event_uuid``
+    (stored or derived) so the client can invalidate this exact entry.
     """
     if saved is None:
         return None
     form = _score_event_to_form(saved) or {}
-    return {**saved, **form}
+    out: dict[str, Any] = {**saved, **form}
+    if sample_id is not None:
+        out["local_event_uuid"] = local_event_uuid_of(saved, sample_id)
+    return out
 
 
 def _max_prior_minutes(
@@ -384,6 +401,7 @@ def create_app(
             most_invested_history = most_invested_entry_for_scorer(score_file, scorer_email)
             history_entries = history_for_scorer(score_file, scorer_email)
         prior_max_minutes = _max_prior_minutes(score_file, scorer_email)
+        invalidated_uuids = sorted(invalidated_local_uuids(score_file))
         config_changes = drain_changes()
         container_exists = container_is_running(container_name)
         if setup_status_now == "error":
@@ -412,13 +430,14 @@ def create_app(
             general_guidance_url=general_guidance_url(),
             task_guidance_url=task_guidance_url(info["task_name"]),
             task_guidance_label=(info["task_name"].split("/")[-1] or "Task") + " guidance",
-            stash=_saved_score_for_template(stash),
-            most_invested_history=_saved_score_for_template(most_invested_history),
-            history_entries=[_saved_score_for_template(e) for e in history_entries],
+            stash=_saved_score_for_template(stash, sample_id=uuid),
+            most_invested_history=_saved_score_for_template(most_invested_history, sample_id=uuid),
+            history_entries=[_saved_score_for_template(e, sample_id=uuid) for e in history_entries],
             has_local_history=has_local_history,
             has_stash=has_stash,
             finish_recorded=finish_recorded,
             prior_max_minutes=prior_max_minutes,
+            invalidated_uuids=invalidated_uuids,
             clear_on_submit=clear_on_submit_mode(),
             pause_timer_hotkey=pause_timer_hotkey(),
             scratchpad_content=load_scratchpad(samples_dir, uuid),
@@ -607,9 +626,12 @@ def create_app(
             samples_dir = state["samples_dir"]
             scorer_email = state["scorer_email"]
 
+        # Tag every finalized score with a fresh local event uuid so it can be
+        # invalidated and joined on import. (Drafts/stashes get none.)
         entry = _form_to_score_event(
             form,
             author_email=scorer_email,
+            local_event_uuid=new_local_event_uuid(),
         )
 
         # Dedupe: a no-op resubmit (every score field identical to a prior
@@ -629,8 +651,9 @@ def create_app(
         # keep the draft so iteration isn't lost.
         stash_dropped = stash_matches_submission((existing or {}).get("stash"), entry)
         append_history(samples_dir, uuid, entry, drop_stash=stash_dropped)
-        # No scores.jsonl write here: it's a generated export, rebuilt on demand
-        # from this history by ``local-manual-score export`` (see scoring.export).
+        # No export write here: the per-sample score logs are a generated export,
+        # rebuilt on demand from this history by ``local-manual-score export``
+        # (see scoring.export).
 
         # Recompute prior_max_minutes including the entry we just appended so
         # the client can warn on the next submission if its minutes drop below.
@@ -646,7 +669,7 @@ def create_app(
         return jsonify(
             success=True,
             has_next=has_next,
-            saved_entry=_saved_score_for_template(entry),
+            saved_entry=_saved_score_for_template(entry, sample_id=uuid),
             score_path=str(history_path(samples_dir)),
             queue_done=queue_done,
             queue_skipped=queue_skipped,
@@ -704,9 +727,33 @@ def create_app(
             success=True,
             uuid=uuid,
             scorer_email=scorer_email,
-            entries=[_saved_score_for_template(e) for e in entries],
+            entries=[_saved_score_for_template(e, sample_id=uuid) for e in entries],
+            invalidated=sorted(invalidated_local_uuids(score_file)),
             finished_at=(score_file or {}).get("finished_at"),
         )
+
+    @app.route("/api/invalidate", methods=["POST"])
+    def invalidate_score() -> ResponseReturnValue:
+        """Invalidate a finalized score on the current sample by its event uuid.
+
+        Body ``{"local_event_uuid": str, "reason"?: str}``. Persists an
+        invalidation record (idempotent per target uuid) so the UI can grey out
+        the score and the export emits an ``event_invalidation`` info line. Under
+        ``/api/``, so the exit-guard already blocks it while shutting down.
+        """
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify(success=False, error="Invalid request"), 400
+        local_event_uuid = data.get("local_event_uuid")
+        if not isinstance(local_event_uuid, str) or not local_event_uuid:
+            return jsonify(success=False, error="Missing local_event_uuid"), 400
+        reason = str(data.get("reason") or "")
+        with lock:
+            uuid = state["uuid"]
+            samples_dir = state["samples_dir"]
+            scorer_email = state["scorer_email"]
+        add_invalidation(samples_dir, uuid, local_event_uuid, scorer_email, reason)
+        return jsonify(success=True)
 
     def advance_response() -> ResponseReturnValue:
         """Run advance_fn and translate its result into a JSON response."""
@@ -761,9 +808,9 @@ def create_app(
     def save_scratchpad_route() -> ResponseReturnValue:
         """Persist the per-sample scratch pad in the sample's store record.
 
-        UI-only working state — it never lands in ``scores.jsonl`` (that's built
-        from the score form fields only). Empty content drops the ``scratchpad``
-        key so a sample with no notes leaves no entry.
+        UI-only working state — it never lands in the score-log export (that's
+        built from the score form fields only). Empty content drops the
+        ``scratchpad`` key so a sample with no notes leaves no entry.
         """
         data = request.get_json()
         if not isinstance(data, dict) or "content" not in data:

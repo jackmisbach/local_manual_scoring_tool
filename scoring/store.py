@@ -1,20 +1,17 @@
 """Local on-disk store for the manual scoring tool.
 
-Two JSONL files live at the samples root:
+The samples root holds ``history.jsonl`` — one line per sample, keyed by sample
+``id`` (the sample dir name). A record holds the sample's working/UI state
+(``history``, ``stash``, ``finished_at``, ``scratchpad``, ``timers``,
+``invalidations``) plus an optional ``skipped`` flag. Everything else about a
+sample's status is *derived* from this content (see :func:`derive_queue_status`),
+not stored — a sample the user hasn't touched has no record at all. Updates are
+read-modify-rewrite under a module lock.
 
-- ``history.jsonl`` — one line per sample, keyed by sample ``id`` (the sample
-  dir name). A record holds the sample's working/UI state (``history``,
-  ``stash``, ``finished_at``, ``scratchpad``, ``timers``) plus an optional
-  ``skipped`` flag. Everything else about a sample's status is *derived* from
-  this content (see :func:`derive_queue_status`), not stored — a sample the user
-  hasn't touched has no record at all. Updates are read-modify-rewrite under a
-  module lock.
-
-- ``scores.jsonl`` — canonical flat export, generated on demand (overwritten)
-  from ``history.jsonl`` history by ``local-manual-score export`` (see
-  :mod:`scoring.export`). One flat line per finalized score (``id``, ``scorer``,
-  ``value``, ``explanation``, ``minutes_to_score``, ``scored_at``,
-  ``task_name``). It is never read by the tool and is not written on submit.
+The per-sample score log export (``score_log.jsonl`` zipped into
+``output_scores.zip``) is generated on demand from this history by
+``local-manual-score export`` (see :mod:`scoring.export`) — it is never read by
+the tool and is not written on submit.
 
 Status taxonomy (a derived queue-entry value — only ``skipped`` is persisted):
 
@@ -29,14 +26,21 @@ import json
 import logging
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Literal, NotRequired, TypedDict, cast
+
+from scoring.infra import MANUAL_SCORE_SCORER
 
 logger = logging.getLogger(__name__)
 
 HISTORY_FILENAME = "history.jsonl"
 LEGACY_HISTORY_FILENAME = "ui_state.jsonl"
-SCORES_FILENAME = "scores.jsonl"
+
+# Stable namespace for deriving a ``local_event_uuid`` for pre-feature history
+# entries that predate the field. Deterministic so repeated exports of the same
+# entry resolve to the same uuid (the DB dedups score events by it on import).
+_LOCAL_EVENT_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "local-manual-scoring-tool/score-event")
 
 Status = Literal["open", "skipped", "scored", "done"]
 
@@ -90,6 +94,20 @@ class SavedScore(TypedDict, total=False):
     saved_at: NotRequired[str]
 
 
+class InvalidationRecord(TypedDict, total=False):
+    """One persisted invalidation of a finalized score, by its local event uuid.
+
+    ``local_target_event_uuid`` identifies the score event being invalidated (its
+    ``score.metadata.local_event_uuid``). ``author`` / ``reason`` are provenance;
+    ``invalidated_at`` is the ISO 8601 timestamp of the local persist.
+    """
+
+    local_target_event_uuid: str
+    author: str
+    reason: str
+    invalidated_at: str
+
+
 class TimerSnapshot(TypedDict, total=False):
     """Last known state of one stopwatch timer."""
 
@@ -111,6 +129,7 @@ class ScoreFile(TypedDict):
     - ``finished_at`` (optional): ISO timestamp the user clicked "Done Scoring".
     - ``scratchpad`` (optional): free-form notes for the sample.
     - ``timers`` (optional): persisted stopwatch state.
+    - ``invalidations`` (optional): list of score invalidations (by local event uuid).
     """
 
     stash: NotRequired[SavedScore]
@@ -118,10 +137,13 @@ class ScoreFile(TypedDict):
     finished_at: NotRequired[str]
     scratchpad: NotRequired[str]
     timers: NotRequired[TimerState]
+    invalidations: NotRequired[list[InvalidationRecord]]
 
 
 # Keys of a record that belong to the ScoreFile (working/UI) view.
-_SCORE_KEYS: frozenset[str] = frozenset({"history", "stash", "finished_at", "scratchpad", "timers"})
+_SCORE_KEYS: frozenset[str] = frozenset(
+    {"history", "stash", "finished_at", "scratchpad", "timers", "invalidations"}
+)
 
 # Every key persisted in a record besides ``id``: the working/UI score view plus
 # the lone ``skipped`` tracking flag. Anything else (e.g. legacy
@@ -167,10 +189,6 @@ def migrate_legacy_history_file(root: Path) -> None:
         return
     legacy_path.rename(new_path)
     logger.info("Migrated legacy %s -> %s", legacy_path.name, new_path.name)
-
-
-def scores_path(root: Path) -> Path:
-    return root / SCORES_FILENAME
 
 
 def _load_records(root: Path) -> dict[str, dict[str, Any]]:
@@ -226,7 +244,7 @@ def iter_score_files(root: Path) -> list[tuple[str, ScoreFile]]:
     """Return ``(sample_id, ScoreFile)`` for every record with score/UI content.
 
     A public, read-only view over ``history.jsonl`` for callers (e.g. the
-    ``scores.jsonl`` export) that need to walk every sample's working state.
+    score-log export) that need to walk every sample's working state.
     Skip-only records (no history/stash/etc.) are omitted, since they carry no
     score content. Ordering follows :func:`_load_records` (file order).
     """
@@ -417,37 +435,138 @@ def save_timer_state(root: Path, uuid: str, state: TimerState | None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Canonical scores export (scores.jsonl) — pure row building
+# Local event uuids + invalidations
 # ---------------------------------------------------------------------------
 
 
-def build_score_row(uuid: str, entry: SavedScore, task_name: str) -> dict[str, Any]:
-    """Build one flat ``scores.jsonl`` row from a history entry (no I/O).
+def new_local_event_uuid() -> str:
+    """A fresh local event uuid for tagging a finalized score."""
+    return str(uuid.uuid4())
 
-    ``entry`` is a SavedScore from a sample's history; ``task_name`` is joined in
-    by the caller (from the sample's ``sample.json``) so this module needs no
-    dependency on :mod:`scoring.state`. The row shape and field derivation match
-    the legacy live append: ``scorer`` prefers ``score.metadata.author`` over the
-    constant ``entry.scorer``, and ``scored_at`` falls back to the current time.
+
+def local_event_uuid_of(entry: SavedScore, sample_id: str) -> str:
+    """The stable ``local_event_uuid`` for a history entry.
+
+    Returns the stored ``score.metadata.local_event_uuid`` when it's a non-empty
+    string. Otherwise (pre-feature entries) derives a deterministic uuid5 from
+    the sample id + author + scored_at + value so repeated exports of the same
+    entry resolve to the same id.
+    """
+    score = entry.get("score") or {}
+    meta = score.get("metadata") or {}
+    stored = meta.get("local_event_uuid")
+    if isinstance(stored, str) and stored:
+        return stored
+    author = meta.get("author") or entry.get("scorer") or ""
+    scored_at = meta.get("scored_at") or entry.get("saved_at") or ""
+    value = score.get("value")
+    name = f"{sample_id}|{author}|{scored_at}|{value}"
+    return str(uuid.uuid5(_LOCAL_EVENT_NAMESPACE, name))
+
+
+def add_invalidation(
+    root: Path,
+    uuid: str,
+    local_target_event_uuid: str,
+    author: str,
+    reason: str,
+) -> None:
+    """Persist an invalidation of the score event ``local_target_event_uuid``.
+
+    Read-modify-write the sample's ``invalidations`` list. Idempotent: if one
+    already targets the same event uuid, this is a no-op (no duplicate). Stamps
+    ``invalidated_at`` with the current time.
+    """
+    with _records_lock:
+        score_file: ScoreFile = load_score_file(root, uuid) or {"history": []}
+        invalidations = list(score_file.get("invalidations") or [])
+        if any(
+            inv.get("local_target_event_uuid") == local_target_event_uuid for inv in invalidations
+        ):
+            return
+        invalidations.append(
+            {
+                "local_target_event_uuid": local_target_event_uuid,
+                "author": author,
+                "reason": reason,
+                "invalidated_at": now_iso(),
+            }
+        )
+        score_file["invalidations"] = invalidations
+        write_score_file(root, uuid, score_file)
+
+
+def invalidated_local_uuids(score_file: ScoreFile | None) -> set[str]:
+    """The set of ``local_target_event_uuid`` across a sample's invalidations."""
+    if score_file is None:
+        return set()
+    out: set[str] = set()
+    for inv in score_file.get("invalidations") or []:
+        target = inv.get("local_target_event_uuid")
+        if isinstance(target, str) and target:
+            out.add(target)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Score-log event shapes (for the per-sample score_log.jsonl export / DB import)
+# ---------------------------------------------------------------------------
+
+
+def build_score_event(entry: SavedScore, sample_id: str) -> dict[str, Any]:
+    """Build a ``score`` event line from a history entry (no I/O).
+
+    Preserves the existing score payload + metadata and ensures
+    ``metadata.local_event_uuid`` is set (resolved via :func:`local_event_uuid_of`).
     """
     score = entry.get("score") or {}
     meta = score.get("metadata") or {}
     return {
-        "id": uuid,
-        "scorer": meta.get("author") or entry.get("scorer") or "",
-        "value": score.get("value"),
-        "explanation": score.get("explanation", ""),
-        "minutes_to_score": meta.get("minutes_spent_scoring"),
-        "scored_at": meta.get("scored_at") or now_iso(),
-        "task_name": task_name or "",
+        "event_type": "score",
+        "scorer": entry.get("scorer") or MANUAL_SCORE_SCORER,
+        "score": {
+            **score,
+            "metadata": {**meta, "local_event_uuid": local_event_uuid_of(entry, sample_id)},
+        },
     }
+
+
+def build_invalidation_event(inv: InvalidationRecord) -> dict[str, Any]:
+    """Build an ``info`` event line invalidating a score, for DB import.
+
+    ``target_event_uuid`` is intentionally null — the DB fills it on import by
+    resolving ``local_target_event_uuid`` against the score events'
+    ``metadata.local_event_uuid``.
+    """
+    return {
+        "event_type": "info",
+        "info_source": "event_invalidation",
+        "info_data": {
+            "target_event_uuid": None,
+            "local_target_event_uuid": inv.get("local_target_event_uuid", ""),
+            "provenance": {
+                "author": inv.get("author", ""),
+                "reason": inv.get("reason", ""),
+                "metadata": {"tool": "local-manual-scoring-tool"},
+            },
+        },
+    }
+
+
+def score_log_lines(score_file: ScoreFile, sample_id: str) -> list[dict[str, Any]]:
+    """All score-log event lines for one sample: score events then invalidations."""
+    return [build_score_event(e, sample_id) for e in score_file["history"]] + [
+        build_invalidation_event(inv) for inv in (score_file.get("invalidations") or [])
+    ]
 
 
 # ---------------------------------------------------------------------------
 # Pure helpers over score files (no I/O)
 # ---------------------------------------------------------------------------
 
-_VOLATILE_SCORE_META_KEYS: frozenset[str] = frozenset({"scored_at"})
+# Metadata keys that vary per persist and so must not count toward score
+# equality (dedup of no-op resubmits, stash-vs-submission matching).
+_VOLATILE_SCORE_META_KEYS: frozenset[str] = frozenset({"scored_at", "local_event_uuid"})
 
 
 def _score_payload_equal(a: ScoreEventScore, b: ScoreEventScore) -> bool:

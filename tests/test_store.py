@@ -1,13 +1,11 @@
 """Tests for the local JSONL store (scoring.store).
 
-Covers the two files at the samples root:
-
-- ``history.jsonl``: keyed per-sample records holding the working/UI subset
-  (history / stash / finished_at / scratchpad / timers) plus the lone
-  persisted ``skipped`` flag; and
-- ``scores.jsonl``: the flat export of finalized scores, generated on demand
-  (see :func:`scoring.export.export_scores` and ``test_export.py``). Only the
-  pure row builder (:func:`scoring.store.build_score_row`) lives here.
+Covers ``history.jsonl`` at the samples root: keyed per-sample records holding
+the working/UI subset (history / stash / finished_at / scratchpad / timers /
+invalidations) plus the lone persisted ``skipped`` flag. The per-sample
+score-log export builders (:func:`scoring.store.build_score_event` etc.) are
+round-tripped through ``test_export.py``; the local-event-uuid + invalidation
+helpers are exercised here and in ``test_invalidate.py``.
 
 All I/O is against a tmp dir, so these tests need no Docker, network, or Hawk.
 """
@@ -15,6 +13,7 @@ All I/O is against a tmp dir, so these tests need no Docker, network, or Hawk.
 from __future__ import annotations
 
 import json
+import uuid
 from pathlib import Path
 
 from scoring.store import (
@@ -24,17 +23,21 @@ from scoring.store import (
     STATUS_SCORED,
     STATUS_SKIPPED,
     SavedScore,
+    add_invalidation,
     append_history,
-    build_score_row,
+    build_invalidation_event,
+    build_score_event,
     clear_finished,
     clear_stash,
     derive_queue_status,
     derive_status_from_score_file,
     has_finish_event,
     history_path,
+    invalidated_local_uuids,
     iter_score_files,
     load_score_file,
     load_skipped,
+    local_event_uuid_of,
     save_stash,
     set_finished,
     set_skipped,
@@ -220,41 +223,78 @@ def test_clear_finished_drops_timestamp(tmp_path: Path) -> None:
     assert has_finish_event(score_file) is False
 
 
-# --- build_score_row (pure flat-row builder) ------------------------------
+# --- local_event_uuid_of --------------------------------------------------
 
 
-def test_build_score_row_shape_and_fields() -> None:
+def test_local_event_uuid_of_returns_stored() -> None:
+    entry = _entry(value=0.6)
+    entry["score"]["metadata"]["local_event_uuid"] = "stored-uuid"
+    assert local_event_uuid_of(entry, UUID) == "stored-uuid"
+
+
+def test_local_event_uuid_of_derives_stably_when_absent() -> None:
+    """A pre-feature entry (no stored uuid) derives a stable, valid uuid5."""
+    entry = _entry(value=0.6)
+    first = local_event_uuid_of(entry, UUID)
+    second = local_event_uuid_of(entry, UUID)
+    assert first == second  # deterministic
+    # A valid uuid string.
+    uuid.UUID(first)
+    # Empty stored value also falls through to the derivation.
+    entry["score"]["metadata"]["local_event_uuid"] = ""
+    assert local_event_uuid_of(entry, UUID) == first
+    # A different sample id yields a different derived uuid.
+    assert local_event_uuid_of(entry, "other-sample") != first
+
+
+# --- invalidations --------------------------------------------------------
+
+
+def test_add_invalidation_is_idempotent(tmp_path: Path) -> None:
+    add_invalidation(tmp_path, UUID, "evt-1", SCORER, "wrong")
+    add_invalidation(tmp_path, UUID, "evt-1", SCORER, "wrong again")
+    add_invalidation(tmp_path, UUID, "evt-2", SCORER, "")
+    score_file = load_score_file(tmp_path, UUID)
+    assert score_file is not None
+    invs = score_file["invalidations"]
+    assert [i["local_target_event_uuid"] for i in invs] == ["evt-1", "evt-2"]
+    # The first (winning) record keeps its original reason; each is stamped.
+    assert invs[0]["reason"] == "wrong"
+    assert all(i.get("invalidated_at") for i in invs)
+    assert invalidated_local_uuids(score_file) == {"evt-1", "evt-2"}
+
+
+def test_invalidated_local_uuids_none() -> None:
+    assert invalidated_local_uuids(None) == set()
+
+
+# --- score-log builders ---------------------------------------------------
+
+
+def test_build_score_event_shape() -> None:
     entry = _entry(value=0.6, minutes=15)
-    row = build_score_row(UUID, entry, "demo")
-
-    assert set(row) == {
-        "id",
-        "scorer",
-        "value",
-        "explanation",
-        "minutes_to_score",
-        "scored_at",
-        "task_name",
-    }
-    assert row["id"] == UUID
-    # scorer prefers score.metadata.author over the constant entry.scorer.
-    assert row["scorer"] == SCORER
-    assert row["value"] == 0.6
-    assert row["explanation"] == "because"
-    assert row["minutes_to_score"] == 15
-    assert row["scored_at"] == "2026-06-25T00:00:00Z"
-    assert row["task_name"] == "demo"
+    event = build_score_event(entry, UUID)
+    assert event["event_type"] == "score"
+    assert event["scorer"] == "manual_score"
+    meta = event["score"]["metadata"]
+    # Preserves existing metadata and ensures local_event_uuid is set.
+    assert meta["author"] == SCORER
+    assert meta["minutes_spent_scoring"] == 15
+    assert meta["local_event_uuid"] == local_event_uuid_of(entry, UUID)
 
 
-def test_build_score_row_falls_back_to_constant_scorer() -> None:
-    """With no metadata author, the constant ``entry.scorer`` is used."""
-    entry: SavedScore = {"scorer": "manual_score", "score": {"value": 0.5}}
-    row = build_score_row(UUID, entry, "")
-    assert row["scorer"] == "manual_score"
-    # scored_at always present (current time when absent from metadata).
-    assert isinstance(row["scored_at"], str)
-    assert row["scored_at"]
-    assert row["task_name"] == ""
+def test_build_invalidation_event_shape() -> None:
+    event = build_invalidation_event(
+        {"local_target_event_uuid": "evt-1", "author": SCORER, "reason": "wrong"}
+    )
+    assert event["event_type"] == "info"
+    assert event["info_source"] == "event_invalidation"
+    assert event["info_data"]["target_event_uuid"] is None
+    assert event["info_data"]["local_target_event_uuid"] == "evt-1"
+    prov = event["info_data"]["provenance"]
+    assert prov["author"] == SCORER
+    assert prov["reason"] == "wrong"
+    assert prov["metadata"]["tool"] == "local-manual-scoring-tool"
 
 
 # --- iter_score_files -----------------------------------------------------

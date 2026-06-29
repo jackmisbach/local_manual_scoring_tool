@@ -32,11 +32,23 @@ local-manual-score
 
 ## Exporting scores
 
-When you are done with your scores. Export your scoring records with this command and send the file to us.
+When you're done scoring, export your records and send us the resulting
+`output_scores.zip`:
 
 ```bash
 local-manual-score export data/samples
 ```
+
+This (re)builds `data/samples/output_score_logs/<sample>/score_log.jsonl` — one
+event log per sample (your score events plus any invalidations) — and zips them
+all into `data/samples/output_scores.zip`.
+
+### Invalidating a score
+
+In the **Your scores** side panel, click the **×** on a score entry to invalidate
+it (you'll be asked for an optional reason). Invalidated scores are struck through
+and recorded as invalidation events in that sample's `score_log.jsonl`, so they
+ride along in the export for us to reconcile.
 
 
 ## Extras

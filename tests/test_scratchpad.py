@@ -1,9 +1,8 @@
 """Per-sample scratch-pad storage and the save route.
 
 The scratch pad is free-form per-sample notes stored inside the sample's
-``history.jsonl`` record under ``scratchpad``. It never lands in
-``scores.jsonl`` and has no task/variant promotion — each sample's pad is its
-own.
+``history.jsonl`` record under ``scratchpad``. It never lands in the score-log
+export and has no task/variant promotion — each sample's pad is its own.
 """
 
 from __future__ import annotations

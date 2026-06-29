@@ -1,52 +1,55 @@
-"""Generate the canonical ``scores.jsonl`` export from ``history.jsonl``.
+"""Generate the per-sample score-log export from ``history.jsonl``.
 
-``scores.jsonl`` is a pure downstream export (METR imports it into a multi-author
-warehouse); the tool never reads it back. Rather than double-writing it on every
+The export is a pure downstream artifact (METR imports it into a multi-author
+warehouse); the tool never reads it back. Rather than double-writing on every
 submit, it is *rebuilt* on demand from each sample's history in
-``history.jsonl`` — one flat row per history entry across all samples.
+``history.jsonl``:
 
-This is the join layer: it pulls each sample's working state from
-:mod:`scoring.store` and its ``task_name`` from :mod:`scoring.state`, keeping
-``store`` free of any dependency on ``state``.
+- one ``score_log.jsonl`` per sample, under ``output_score_logs/<uuid>/``, with
+  one event per line (score events then invalidation events — see
+  :func:`scoring.store.score_log_lines`), and
+- the whole tree zipped to ``output_scores.zip`` at the samples root, ready for
+  DB import.
+
+Sample association is the per-sample dir name (the ``<uuid>/`` containing each
+``score_log.jsonl``); score events carry no ``task_name``, so this module needs
+no dependency on :mod:`scoring.state`.
 """
 
 import json
+import shutil
 from pathlib import Path
 
-from scoring.state import load_sample_json, sample_task_name
-from scoring.store import (
-    build_score_row,
-    iter_score_files,
-    scores_path,
-)
+from scoring.store import iter_score_files, score_log_lines
 
 
-def build_score_rows(samples_dir: Path) -> list[dict[str, object]]:
-    """Build every ``scores.jsonl`` row from ``history.jsonl`` history.
+def export_score_logs(samples_dir: Path) -> Path:
+    """Rebuild the per-sample score logs and zip them; return the zip path.
 
-    Walks every sample with score content, joining each history entry with its
-    sample's ``task_name`` (from ``sample.json``). Row order follows the records
-    in ``history.jsonl`` and, within a sample, its history order.
+    Rebuilds ``output_score_logs/`` from scratch (so deleted samples don't
+    linger), writes ``output_score_logs/<uuid>/score_log.jsonl`` for every sample
+    with score-log content, then zips the tree to ``output_scores.zip`` at the
+    samples root. Re-running is idempotent. A stale ``scores.jsonl`` from the
+    legacy export is cleaned up best-effort.
     """
-    rows: list[dict[str, object]] = []
+    out_dir = samples_dir / "output_score_logs"
+    shutil.rmtree(out_dir, ignore_errors=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     for uuid, score_file in iter_score_files(samples_dir):
-        task_name = sample_task_name(load_sample_json(samples_dir, uuid))
-        rows.extend(build_score_row(uuid, entry, task_name) for entry in score_file["history"])
-    return rows
+        lines = score_log_lines(score_file, uuid)
+        if not lines:
+            continue
+        sample_out = out_dir / uuid
+        sample_out.mkdir(parents=True, exist_ok=True)
+        with (sample_out / "score_log.jsonl").open("w", encoding="utf-8") as f:
+            for line in lines:
+                f.write(json.dumps(line, sort_keys=True))
+                f.write("\n")
 
+    shutil.make_archive(str(samples_dir / "output_scores"), "zip", root_dir=str(out_dir))
 
-def export_scores(samples_dir: Path) -> Path:
-    """Rebuild ``scores.jsonl`` from ``history.jsonl``; return the written path.
+    # Best-effort cleanup of the legacy flat export, if present.
+    (samples_dir / "scores.jsonl").unlink(missing_ok=True)
 
-    Overwrites any existing file so the export always reflects current history
-    (re-running it is idempotent). Always writes the file, even when there are no
-    rows yet (an empty file is a valid "no scores" export).
-    """
-    rows = build_score_rows(samples_dir)
-    path = scores_path(samples_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        for row in rows:
-            f.write(json.dumps(row, sort_keys=True))
-            f.write("\n")
-    return path
+    return samples_dir / "output_scores.zip"

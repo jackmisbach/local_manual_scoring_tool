@@ -11,9 +11,9 @@ Each test gets:
   is touched.
 
 There is no Hawk in this fork: scores live in ``history.jsonl`` at the samples
-root (``scores.jsonl`` is a generated export, not written on submit — see
-test_export.py), so the routes do real on-disk reads/writes against the tmp dir
-and there is nothing to monkeypatch at the network boundary.
+root (the score-log ``output_scores.zip`` is a generated export, not written on
+submit — see test_export.py), so the routes do real on-disk reads/writes against
+the tmp dir and there is nothing to monkeypatch at the network boundary.
 
 Config (scorer email, task selection, task guidance, the change banner) lives
 in a per-user config file under ``$XDG_CONFIG_HOME``; an autouse fixture points
