@@ -35,7 +35,7 @@ Key invariants (do not reintroduce what was stripped):
   (`_setup_sample`), and `advance_to_next`. Also routes the `config` and
   `export` subcommands.
 - `scoring/app.py` — `create_app()`: Flask routes / JSON API for the scoring UI
-  (scoring page, submit, skip, done, invalidate, scratchpad, timers, task
+  (scoring page, submit, skip, done, invalidate, timers, task
   selection, exit).
 - `scoring/state.py` — TypedDicts for the shared `ScoringState` / `QueueEntry` /
   `SampleInfo`, plus `sample.json` loading (`load_sample_json`,
@@ -83,11 +83,10 @@ JSONL / state files at the samples root:
   `output_score_logs/` tree is zipped to `output_scores.zip`.
 - `history.jsonl` — one line per sample (keyed by `id`), holding the persisted
   `skipped` flag plus the working/UI subset (`history`, `stash`, `finished_at`,
-  `scratchpad`, `timers`, `invalidations`). Each finalized `history` entry carries
+  `timers`, `invalidations`). Each finalized `history` entry carries
   a `score.metadata.local_event_uuid`; `invalidations` records which of those the
   user invalidated (`local_target_event_uuid`, `author`, `reason`,
-  `invalidated_at`). The `scratchpad` is free-form per-sample notes (no
-  task/variant sharing). Status is derived from this content, not stored.
+  `invalidated_at`). Status is derived from this content, not stored.
   Read-modify-rewrite under a module lock.
 
 Image tarballs live in the images dir as `<task>-<version>.tar` (named by

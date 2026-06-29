@@ -124,60 +124,9 @@
                 max-height: var(--content-h, 500px);
                 overflow-y: auto;
             }
-            /* Scratch pad: a layout panel like the instructions. The content
-               is height-driven by the shared --content-h (not max-height) so
-               the textarea fills it. */
-            #scratchpad-section > .content {
-                position: relative;
-                display: flex;
-                flex-direction: column;
-                height: var(--content-h, 240px);
-                /* Matches the score panel's floor so the two stay equal height
-                   in two-col when dragged to the minimum. */
-                min-height: 240px;
-                max-height: none;
-                overflow: visible;
-                padding: 12px 20px 16px;
-            }
-            body.two-col #scratchpad-section[open] > .content {
-                height: var(--content-h, 500px);
-            }
-            #scratchpad-textarea {
-                flex: 1 1 auto;
-                min-height: 0;
-                width: 100%;
-                box-sizing: border-box;
-                resize: none;
-                border: 1px solid #ccc;
-                border-radius: 6px;
-                padding: 8px;
-                font-family: inherit;
-                font-size: inherit;
-            }
-            /* Transient save status overlaid in the corner so it never steals a
-               line from the textarea (which must fill the box to match the
-               paired score panel exactly). */
-            #scratchpad-status {
-                position: absolute;
-                right: 28px;
-                bottom: 22px;
-                margin: 0;
-                font-size: 0.8em;
-                color: #666;
-                pointer-events: none;
-                padding: 1px 5px;
-                border-radius: 4px;
-                background: rgba(255, 255, 255, 0.85);
-            }
-            #scratchpad-status:empty {
-                display: none;
-            }
-            /* Submit Score panel mirrors the scratch pad so the two sit at the
-               same height side by side: a bare card (padding moved into the
-               header + .content) whose header bar matches the scratch pad
-               <summary>, and whose .content is a height-driven flex column the
-               explanation textarea fills. Both panels share --content-h, and
-               with identical chrome the section heights come out equal. */
+            /* Submit Score panel: a bare card (padding moved into the header +
+               .content) whose .content is a height-driven flex column the
+               explanation textarea fills. */
             .section[data-panel="score"] {
                 padding: 0;
                 overflow: hidden;
@@ -204,8 +153,7 @@
                 gap: 8px;
                 flex-shrink: 0;
             }
-            /* Compact sizing so the header bar matches the height of the
-               scratch pad summary, keeping the two panels aligned side by side. */
+            /* Compact sizing keeps the header bar tidy. */
             .score-header-actions button {
                 font-size: 0.78em;
                 padding: 3px 10px;
@@ -229,9 +177,6 @@
                 flex-direction: column;
                 flex: 1 1 auto;
                 min-height: 0;
-            }
-            body.two-col .panel-cell > .section[data-panel] {
-                margin-bottom: 0;
             }
             .instructions-loading {
                 display: flex;
@@ -781,48 +726,8 @@
                 transition: width 0.3s;
             }
 
-            .panel-pair {
-                display: block;
-            }
-            body.two-col .panel-pair {
-                display: flex;
-                margin-bottom: 0;
-            }
-            body.two-col .panel-cell {
-                flex: 1 1 0;
-                min-width: 100px;
-                display: flex;
-                flex-direction: column;
-            }
-            body.two-col .panel-cell details {
-                margin-bottom: 0;
-            }
-            /* The pair's two cells already stretch to equal height (flex row).
-               Make the Submit Score / scratch pad panels fill their cell so
-               their card bottoms line up exactly, absorbing any sub-pixel
-               difference between the header bar and the scratch pad summary.
-               Only the open scratch pad fills — collapsed it stays compact. */
-            body.two-col .panel-cell > .section[data-panel="score"],
-            body.two-col .panel-cell > #scratchpad-section[open] {
-                flex: 1 1 auto;
-                min-height: 0;
-            }
-            /* In two-col the pair owns one height; both panels' .content
-               share it via the --content-h variable. (Chrome's <details>
-               shadow DOM ignores display: flex on its host, so a flex
-               chain through details doesn't constrain .content; an
-               explicit height does.) */
-            body.two-col .panel-cell details[open] > .content {
-                height: var(--content-h, 500px);
-                max-height: none;
-            }
-            /* Height resizers sit in the gap *between* boxes, mirroring the
-               col-resizer between side-by-side panels. Two flavors, each shown
-               only in its layout:
-               - per-panel (has data-panel): one below each box in one-col, so
-                 every box resizes independently;
-               - per-pair (no data-panel): one full-width bar below the pair in
-                 two-col, where the side-by-side boxes share one height. */
+            /* Height resizers sit in the gap below a resizable box. Each
+               per-panel bar (has data-panel) resizes just its own panel. */
             .row-resizer {
                 height: 6px;
                 cursor: ns-resize;
@@ -835,47 +740,16 @@
             .row-resizer.dragging {
                 background: rgba(37, 99, 235, 0.25);
             }
-            /* One-col bars sit after a box that still carries its 16px bottom
+            /* The bar sits after a box that still carries its 16px bottom
                margin; pull the bar up into that margin so it's centered in the
                gap (5px each side) instead of leaving a big gap above it. */
             .row-resizer[data-panel] {
                 margin: -11px 0 5px 0;
             }
-            .row-resizer:not([data-panel]) {
-                display: none;
-            }
-            body.two-col .row-resizer[data-panel] {
-                display: none;
-            }
-            body.two-col .row-resizer:not([data-panel]) {
-                display: block;
-            }
-            /* No grip for a collapsed panel — nothing to resize. */
-            .panel-cell:has(details:not([open])) .row-resizer[data-panel] {
-                display: none;
-            }
-            .col-resizer {
-                display: none;
-                width: 6px;
-                cursor: ew-resize;
-                flex-shrink: 0;
-                background: transparent;
-                transition: background 0.15s;
-                border-radius: 3px;
-                align-self: stretch;
-            }
-            body.two-col .col-resizer {
-                display: block;
-            }
-            .col-resizer:hover,
-            .col-resizer.dragging {
-                background: rgba(37, 99, 235, 0.25);
-            }
 
             /* Single score group fills the panel: the inputs row sits on top
-               and the explanation textarea flexes to fill the rest, handled
-               like the scratch pad textarea. No card chrome — the panel is the
-               card. */
+               and the explanation textarea flexes to fill the rest. No card
+               chrome — the panel is the card. */
             .score-group {
                 flex: 1 1 auto;
                 display: flex;
@@ -1112,10 +986,7 @@
         </div>
         {% endif %}
 
-        {# Submit Score box paired with the scratch pad: side by side in
-           two-col (col-resizer between them), stacked in one-col. #}
-        <div class="panel-pair" data-pair="1">
-        <div class="panel-cell">
+        {# Submit Score box: a full-width section. #}
         <div class="section"{% if not finish_recorded %} data-panel="score" data-fill{% endif %}>
             {% if finish_recorded %}
             <div style="display: flex; align-items: center; gap: 12px; margin: 0">
@@ -1239,30 +1110,9 @@
             {% endif %}
         </div>{# .section (Submit Score) #}
         {% if not finish_recorded %}
-        <div class="row-resizer" data-panel="score" data-pair="1"></div>
+        <div class="row-resizer" data-panel="score"></div>
         {% endif %}
-        </div>{# .panel-cell #}
-        <div class="col-resizer" data-pair="1"></div>
-        <div class="panel-cell">
-            <details id="scratchpad-section" data-panel="scratchpad" data-fill>
-                <summary>Scratch pad</summary>
-                <div class="content">
-                    <textarea
-                        id="scratchpad-textarea"
-                        placeholder="Notes for this sample. Saved automatically. Not part of the submitted score."
-                    >
-{{ scratchpad_content }}</textarea
-                    >
-                    <p id="scratchpad-status"></p>
-                </div>
-            </details>
-            <div class="row-resizer" data-panel="scratchpad" data-pair="1"></div>
-        </div>
-        </div>{# .panel-pair #}
-        <div class="row-resizer" data-pair="1"></div>
-        {# Submit feedback: a full-width banner below the score / scratch-pad
-           pair, like the other banners, so it reads the same in one- and
-           two-column layouts. #}
+        {# Submit feedback: a full-width banner below the score box. #}
         <div id="result"></div>
         <aside
             class="prior-scores-panel"
@@ -3105,7 +2955,7 @@
         </script>
         <script>
             const LAYOUT_KEY = "manualScoringLayoutV1";
-            const layoutState = { twoCol: false, contentHeights: {}, pairHeights: {}, colSplits: {} };
+            const layoutState = { twoCol: false, contentHeights: {} };
             try {
                 Object.assign(layoutState, JSON.parse(localStorage.getItem(LAYOUT_KEY) || "{}"));
             } catch {}
@@ -3114,15 +2964,9 @@
                 localStorage.setItem(LAYOUT_KEY, JSON.stringify(layoutState));
             }
 
-            function pairPanelNames(pairIdx) {
-                return Array.from(document.querySelectorAll(`.panel-pair[data-pair="${pairIdx}"] [data-panel]`)).map(
-                    (el) => el.dataset.panel,
-                );
-            }
-
-            // A "fill" panel (data-fill, e.g. the scratch pad) holds a textarea
-            // that fills its .content, so the saved height drives `height`, not
-            // `max-height` like the markdown instruction panels.
+            // A "fill" panel (data-fill, e.g. the Submit Score box) holds a
+            // textarea that fills its .content, so the saved height drives
+            // `height`, not `max-height` like the markdown instruction panels.
             function panelIsFill(name) {
                 const el = document.querySelector(`[data-panel="${name}"]`);
                 return el !== null && el.dataset.fill !== undefined;
@@ -3130,66 +2974,19 @@
 
             function applyLayout() {
                 document.body.classList.toggle("two-col", layoutState.twoCol);
-                document.querySelectorAll(".panel-pair").forEach((pair) => {
-                    const panelNames = pairPanelNames(pair.dataset.pair);
-                    if (layoutState.twoCol) {
-                        // Two-col: the pair owns one height shared by both
-                        // panels' .content via --content-h (set by the single
-                        // bar below the pair). Clear any per-panel inline dims
-                        // so the variable governs.
-                        let ph = layoutState.pairHeights[pair.dataset.pair];
-                        if (ph === undefined) {
-                            // Migrate from per-panel heights saved before
-                            // pair-level resize existed.
-                            const heights = panelNames
-                                .map((n) => layoutState.contentHeights[n])
-                                .filter((h) => h !== undefined);
-                            if (heights.length > 0) ph = Math.max(...heights);
-                        }
-                        if (ph) pair.style.setProperty("--content-h", ph + "px");
-                        else pair.style.removeProperty("--content-h");
-                        panelNames.forEach((n) => {
-                            const content = document.querySelector(`[data-panel="${n}"] .content`);
-                            if (content) {
-                                content.style.maxHeight = "";
-                                content.style.height = "";
-                            }
-                        });
+                // Restore each panel's saved height from its own resize bar.
+                document.querySelectorAll("[data-panel]").forEach((panel) => {
+                    const name = panel.dataset.panel;
+                    const content = panel.querySelector(".content");
+                    if (!content) return;
+                    const h = layoutState.contentHeights[name];
+                    if (panelIsFill(name)) {
+                        content.style.maxHeight = "";
+                        content.style.height = h ? h + "px" : "";
                     } else {
-                        // One-col: each panel keeps its own height (its own
-                        // resize bar), so clear the shared variable and apply
-                        // per-panel inline dims.
-                        pair.style.removeProperty("--content-h");
-                        panelNames.forEach((n) => {
-                            const content = document.querySelector(`[data-panel="${n}"] .content`);
-                            if (!content) return;
-                            const h = layoutState.contentHeights[n];
-                            if (panelIsFill(n)) {
-                                content.style.maxHeight = "";
-                                content.style.height = h ? h + "px" : "";
-                            } else {
-                                content.style.height = "";
-                                content.style.maxHeight = h ? h + "px" : "";
-                            }
-                        });
+                        content.style.height = "";
+                        content.style.maxHeight = h ? h + "px" : "";
                     }
-                    const split = layoutState.colSplits[pair.dataset.pair];
-                    const cells = pair.querySelectorAll(".panel-cell");
-                    if (split !== undefined && cells.length === 2) {
-                        cells[0].style.flex = `${split} 1 0`;
-                        cells[1].style.flex = `${1 - split} 1 0`;
-                    }
-                });
-            }
-
-            function syncPairOpenStates() {
-                document.querySelectorAll(".panel-pair").forEach((pair) => {
-                    const detailsList = pair.querySelectorAll("details");
-                    if (detailsList.length !== 2) return;
-                    const anyOpen = Array.from(detailsList).some((d) => d.open);
-                    detailsList.forEach((d) => {
-                        d.open = anyOpen;
-                    });
                 });
             }
 
@@ -3199,54 +2996,22 @@
                 layoutState.twoCol = toggle.checked;
                 saveLayout();
                 applyLayout();
-                if (layoutState.twoCol) syncPairOpenStates();
             });
-
-            document.querySelectorAll(".panel-pair").forEach((pair) => {
-                const detailsList = pair.querySelectorAll("details");
-                if (detailsList.length !== 2) return;
-                detailsList.forEach((d) => {
-                    d.addEventListener("toggle", () => {
-                        if (!layoutState.twoCol) return;
-                        detailsList.forEach((other) => {
-                            if (other !== d && other.open !== d.open) other.open = d.open;
-                        });
-                    });
-                });
-            });
-
-            if (layoutState.twoCol) syncPairOpenStates();
 
             document.querySelectorAll(".row-resizer").forEach((resizer) => {
                 resizer.addEventListener("mousedown", (e) => {
                     e.preventDefault();
-                    // A per-panel bar (has data-panel, one-col) resizes just its
-                    // own panel; a per-pair bar (no data-panel, two-col) resizes
-                    // both panels via the shared --content-h. Each is only
-                    // visible in its layout, so the marker alone decides.
                     const panelName = resizer.dataset.panel;
                     const refContent = panelName
                         ? document.querySelector(`[data-panel="${panelName}"] .content`)
                         : null;
-                    const pair = panelName
-                        ? null
-                        : document.querySelector(`.panel-pair[data-pair="${resizer.dataset.pair}"]`);
-                    // Honor each panel's CSS min-height so the drag stops at the
+                    if (!refContent) return;
+                    // Honor the panel's CSS min-height so the drag stops at the
                     // floor instead of storing smaller (which would render
                     // clamped and lag on the way back up).
                     const cssMin = (el) => parseFloat(getComputedStyle(el).minHeight) || 50;
-                    let startHeight, minH;
-                    if (panelName) {
-                        if (!refContent) return;
-                        startHeight = refContent.offsetHeight;
-                        minH = cssMin(refContent);
-                    } else {
-                        if (!pair) return;
-                        const contents = Array.from(pair.querySelectorAll("[data-panel] .content"));
-                        if (!contents.length) return;
-                        startHeight = Math.max(...contents.map((c) => c.offsetHeight));
-                        minH = Math.max(50, ...contents.map(cssMin));
-                    }
+                    const startHeight = refContent.offsetHeight;
+                    const minH = cssMin(refContent);
                     const startY = e.clientY;
                     resizer.classList.add("dragging");
                     document.body.style.cursor = "ns-resize";
@@ -3254,47 +3019,8 @@
 
                     function onMove(ev) {
                         const h = Math.max(minH, startHeight + (ev.clientY - startY));
-                        if (panelName) {
-                            refContent.style[panelIsFill(panelName) ? "height" : "maxHeight"] = h + "px";
-                            layoutState.contentHeights[panelName] = h;
-                        } else {
-                            pair.style.setProperty("--content-h", h + "px");
-                            layoutState.pairHeights[resizer.dataset.pair] = h;
-                        }
-                    }
-                    function onUp() {
-                        document.removeEventListener("mousemove", onMove);
-                        document.removeEventListener("mouseup", onUp);
-                        document.body.style.cursor = "";
-                        document.body.style.userSelect = "";
-                        resizer.classList.remove("dragging");
-                        saveLayout();
-                    }
-                    document.addEventListener("mousemove", onMove);
-                    document.addEventListener("mouseup", onUp);
-                });
-            });
-
-            document.querySelectorAll(".col-resizer").forEach((resizer) => {
-                resizer.addEventListener("mousedown", (e) => {
-                    if (!layoutState.twoCol) return;
-                    e.preventDefault();
-                    const pair = resizer.closest(".panel-pair");
-                    const cells = pair.querySelectorAll(".panel-cell");
-                    if (cells.length !== 2) return;
-                    const pairRect = pair.getBoundingClientRect();
-                    const resizerWidth = resizer.offsetWidth;
-                    resizer.classList.add("dragging");
-                    document.body.style.cursor = "ew-resize";
-                    document.body.style.userSelect = "none";
-
-                    function onMove(ev) {
-                        const avail = pairRect.width - resizerWidth;
-                        const leftW = Math.max(50, Math.min(avail - 50, ev.clientX - pairRect.left));
-                        const ratio = leftW / avail;
-                        cells[0].style.flex = `${ratio} 1 0`;
-                        cells[1].style.flex = `${1 - ratio} 1 0`;
-                        layoutState.colSplits[resizer.dataset.pair] = ratio;
+                        refContent.style[panelIsFill(panelName) ? "height" : "maxHeight"] = h + "px";
+                        layoutState.contentHeights[panelName] = h;
                     }
                     function onUp() {
                         document.removeEventListener("mousemove", onMove);
@@ -3310,61 +3036,6 @@
             });
 
             applyLayout();
-        </script>
-        <script>
-            // Scratch pad: per-sample free-form notes, no history. Open/closed
-            // is a global preference (persists across samples in this session)
-            // via the <details> element's `open` attribute; content is fetched
-            // at page render time and saved back into the sample's
-            // history.jsonl record under "scratchpad" on input
-            // (debounced) and on blur.
-            const SCRATCHPAD_OPEN_KEY = "manualScoringScratchpadVisibleV1";
-            const scratchpadSection = document.getElementById("scratchpad-section");
-            const scratchpadTextarea = document.getElementById("scratchpad-textarea");
-            const scratchpadStatus = document.getElementById("scratchpad-status");
-
-            scratchpadSection.open = localStorage.getItem(SCRATCHPAD_OPEN_KEY) === "1";
-
-            scratchpadSection.addEventListener("toggle", () => {
-                localStorage.setItem(SCRATCHPAD_OPEN_KEY, scratchpadSection.open ? "1" : "0");
-                if (scratchpadSection.open) scratchpadTextarea.focus();
-            });
-
-            let scratchpadSaveTimer = null;
-            let scratchpadLastSaved = scratchpadTextarea.value;
-
-            async function saveScratchpadNow() {
-                if (scratchpadSaveTimer !== null) {
-                    clearTimeout(scratchpadSaveTimer);
-                    scratchpadSaveTimer = null;
-                }
-                const content = scratchpadTextarea.value;
-                if (content === scratchpadLastSaved) return;
-                scratchpadStatus.textContent = "Saving...";
-                try {
-                    const resp = await fetch("/api/scratchpad", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ content }),
-                    });
-                    const data = await resp.json();
-                    if (data.success) {
-                        scratchpadLastSaved = content;
-                        scratchpadStatus.textContent = "";
-                    } else {
-                        scratchpadStatus.textContent = "Save failed: " + (data.error || "unknown");
-                    }
-                } catch (err) {
-                    scratchpadStatus.textContent = "Save failed: " + err.message;
-                }
-            }
-
-            scratchpadTextarea.addEventListener("input", () => {
-                scratchpadStatus.textContent = "";
-                if (scratchpadSaveTimer !== null) clearTimeout(scratchpadSaveTimer);
-                scratchpadSaveTimer = setTimeout(saveScratchpadNow, 800);
-            });
-            scratchpadTextarea.addEventListener("blur", saveScratchpadNow);
         </script>
         <script>
             // Wire every [data-dismissible-banner] element: show it unless the

@@ -39,9 +39,7 @@ When you're done scoring, export your records and send us the resulting
 local-manual-score export data/samples
 ```
 
-This (re)builds `data/samples/output_score_logs/<sample>/score_log.jsonl` — one
-event log per sample (your score events plus any invalidations) — and zips them
-all into `data/samples/output_scores.zip`.
+This will produce a zip file you can give to us in `data/samples/output_scores.zip`.
 
 ## Extras
 
@@ -83,14 +81,3 @@ local-manual-score [SAMPLES_DIR] [options]
 
 Scorer identity resolves in order: `--scorer` > config `scorer_email` >
 `git config user.email` > your username.
-
-### GUI tasks (noVNC)
-
-Tasks whose name contains `_gui_` (or ends in `_gui`) get noVNC set up
-automatically in the container; you can also force it for all samples with
-`--gui`. View the display at <http://localhost:6080/vnc.html>. Run GUI apps
-inside the container with:
-
-```bash
-DISPLAY=:99 SDL_VIDEODRIVER=x11 XDG_RUNTIME_DIR=/tmp python main.py
-```

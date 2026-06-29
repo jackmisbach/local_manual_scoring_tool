@@ -1,7 +1,7 @@
 """Tests for the local JSONL store (scoring.store).
 
 Covers ``history.jsonl`` at the samples root: keyed per-sample records holding
-the working/UI subset (history / stash / finished_at / scratchpad / timers /
+the working/UI subset (history / stash / finished_at / timers /
 invalidations) plus the lone persisted ``skipped`` flag. The per-sample
 score-log export builders (:func:`scoring.store.build_score_event` etc.) are
 round-tripped through ``test_export.py``; the local-event-uuid + invalidation

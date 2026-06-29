@@ -63,14 +63,12 @@ from scoring.store import (
     invalidated_local_uuids,
     last_activity_map,
     load_score_file,
-    load_scratchpad,
     load_timer_state,
     local_event_uuid_of,
     most_invested_entry_for_scorer,
     new_local_event_uuid,
     now_iso,
     queue_summary_fields,
-    save_scratchpad,
     save_stash,
     save_timer_state,
     set_finished,
@@ -324,10 +322,9 @@ def create_app(
     def block_writes_during_exit() -> tuple[Response, int] | None:
         # Once exit_app has fired, the process is about to die. Block
         # mutating requests so a late write (timer-state sendBeacons on
-        # pagehide, in-flight scratchpad saves, etc.) can't land
-        # half-written while the daemon exit thread tears the process
-        # down. Read-only routes still serve so the page can poll until
-        # the process dies.
+        # pagehide, etc.) can't land half-written while the daemon exit
+        # thread tears the process down. Read-only routes still serve so
+        # the page can poll until the process dies.
         if request.method in ("GET", "HEAD", "OPTIONS"):
             return None
         if not request.path.startswith("/api/"):
@@ -436,7 +433,6 @@ def create_app(
             invalidated_uuids=invalidated_uuids,
             clear_on_submit=clear_on_submit_mode(),
             pause_timer_hotkey=pause_timer_hotkey(),
-            scratchpad_content=load_scratchpad(samples_dir, uuid),
             timer_state=load_timer_state(samples_dir, uuid) or {},
             scorer_email=scorer_email,
             existing_metadata_display=list(EXISTING_METADATA_DISPLAY),
@@ -800,24 +796,6 @@ def create_app(
 
         return jsonify(success=True, score_path=str(history_path(samples_dir)))
 
-    @app.route("/api/scratchpad", methods=["POST"])
-    def save_scratchpad_route() -> ResponseReturnValue:
-        """Persist the per-sample scratch pad in the sample's store record.
-
-        UI-only working state — it never lands in the score-log export (that's
-        built from the score form fields only). Empty content drops the
-        ``scratchpad`` key so a sample with no notes leaves no entry.
-        """
-        data = request.get_json()
-        if not isinstance(data, dict) or "content" not in data:
-            return jsonify(success=False, error="Missing content"), 400
-        content = str(data["content"])
-        with lock:
-            uuid = state["uuid"]
-            samples_dir = state["samples_dir"]
-        save_scratchpad(samples_dir, uuid, content)
-        return jsonify(success=True)
-
     @app.route("/api/timer-state", methods=["POST"])
     def save_timer_state_route() -> ResponseReturnValue:
         """Persist the per-sample stopwatch state inside the sample's record.
@@ -1070,8 +1048,8 @@ def create_app(
     def exit_app() -> ResponseReturnValue:
         stop_all_scoring_containers()
         with lock:
-            # Block further disk-mutating routes (timer-state, scratchpad,
-            # score submit) so a late write can't race the exit. In-memory only.
+            # Block further disk-mutating routes (timer-state, score submit)
+            # so a late write can't race the exit. In-memory only.
             state["exiting"] = True
 
         # Exit in a daemon thread after a short delay so this response flushes

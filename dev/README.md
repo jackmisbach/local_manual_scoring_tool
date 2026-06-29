@@ -146,7 +146,7 @@ module map and architecture orientation.
    - **Done Scoring This Sample** marks it finished (re-surface with `--include-done`).
 4. Every finalized submission is appended to the sample's score history in
    `data/samples/history.jsonl`, alongside working state (drafts, timers,
-   scratchpad, status), so quitting and re-running resumes where you left off.
+   status), so quitting and re-running resumes where you left off.
    The export (`data/samples/output_scores.zip`) is **not** written on submit —
    generate it on demand with `local-manual-score export` (see below).
 

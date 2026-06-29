@@ -2,8 +2,8 @@
 
 The samples root holds ``history.jsonl`` — one line per sample, keyed by sample
 ``id`` (the sample dir name). A record holds the sample's working/UI state
-(``history``, ``stash``, ``finished_at``, ``scratchpad``, ``timers``,
-``invalidations``) plus an optional ``skipped`` flag. Everything else about a
+(``history``, ``stash``, ``finished_at``, ``timers``, ``invalidations``) plus an
+optional ``skipped`` flag. Everything else about a
 sample's status is *derived* from this content (see :func:`derive_queue_status`),
 not stored — a sample the user hasn't touched has no record at all. Updates are
 read-modify-rewrite under a module lock.
@@ -122,7 +122,6 @@ class ScoreFile(TypedDict):
     - ``stash`` (optional): a single in-progress draft.
     - ``history``: append-only list of finalized scoring events.
     - ``finished_at`` (optional): ISO timestamp the user clicked "Done Scoring".
-    - ``scratchpad`` (optional): free-form notes for the sample.
     - ``timers`` (optional): persisted stopwatch state.
     - ``invalidations`` (optional): list of score invalidations (by local event uuid).
     """
@@ -130,14 +129,13 @@ class ScoreFile(TypedDict):
     stash: NotRequired[SavedScore]
     history: list[SavedScore]
     finished_at: NotRequired[str]
-    scratchpad: NotRequired[str]
     timers: NotRequired[TimerState]
     invalidations: NotRequired[list[InvalidationRecord]]
 
 
 # Keys of a record that belong to the ScoreFile (working/UI) view.
 _SCORE_KEYS: frozenset[str] = frozenset(
-    {"history", "stash", "finished_at", "scratchpad", "timers", "invalidations"}
+    {"history", "stash", "finished_at", "timers", "invalidations"}
 )
 
 # Every key persisted in a record besides ``id``: the working/UI score view plus
@@ -390,24 +388,6 @@ def clear_finished(root: Path, uuid: str) -> None:
     """Drop the ``finished_at`` stamp so the sample can be re-scored."""
     score_file: ScoreFile = load_score_file(root, uuid) or {"history": []}
     score_file.pop("finished_at", None)
-    write_score_file(root, uuid, score_file)
-
-
-def load_scratchpad(root: Path, uuid: str) -> str:
-    """Return the saved scratch-pad text, or "" if absent."""
-    score_file = load_score_file(root, uuid)
-    if score_file is None:
-        return ""
-    return score_file.get("scratchpad") or ""
-
-
-def save_scratchpad(root: Path, uuid: str, content: str) -> None:
-    """Upsert (or clear) scratch-pad text inside the sample's record."""
-    score_file: ScoreFile = load_score_file(root, uuid) or {"history": []}
-    if content:
-        score_file["scratchpad"] = content
-    else:
-        score_file.pop("scratchpad", None)
     write_score_file(root, uuid, score_file)
 
 
