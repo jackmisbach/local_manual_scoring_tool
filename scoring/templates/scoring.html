@@ -620,7 +620,7 @@
             :root {
                 --btn-primary: #2563eb; /* blue: main positive action (Submit Score, Open in VS Code) */
                 --btn-success: #059669; /* green: proceed / start (Next, Start Container, Resume Timer) */
-                --btn-warning: #d97706; /* amber: caution / save-not-submit / retry (Stash, Pause, Push, Retry) */
+                --btn-warning: #d97706; /* amber: caution / save-not-submit / retry (Pause, Push, Retry) */
                 --btn-danger: #dc2626; /* red: destructive (Exit, Reset Timer, Stop Container) */
                 --btn-neutral: #6b7280; /* gray: secondary (Skip, Open Artifacts, Tasks) */
             }
@@ -1063,9 +1063,6 @@
                 <div class="score-actions">
                     <button type="submit" class="btn-primary" id="submit-btn" disabled>
                         Submit Score
-                    </button>
-                    <button type="button" class="btn-warning" id="stash-btn" onclick="stashScore()" disabled>
-                        Stash
                     </button>
                     <button
                         type="button"
@@ -1574,20 +1571,6 @@
                     : "";
             }
 
-            // Stash is allowed any time the form has *something* in it —
-            // unlike Submit, it doesn't care whether the values match a
-            // prior submission. Empty-form stashes are pointless (and would
-            // create a draft holding only the scorer name), so disable.
-            function syncStashButton() {
-                const btn = document.getElementById("stash-btn");
-                if (!btn) return;
-                const empty = TRACKED_INPUT_FIELDS.every(f => {
-                    const el = fieldEl(f);
-                    return !el || el.value === "";
-                });
-                btn.disabled = empty;
-            }
-
             function wireSubmitListeners() {
                 if (submitListenersWired) return;
                 submitListenersWired = true;
@@ -1596,7 +1579,6 @@
                     if (!el) return;
                     el.addEventListener("input", () => {
                         syncSubmitButton();
-                        syncStashButton();
                     });
                 });
             }
@@ -1614,7 +1596,6 @@
             // so no separate "last submitted snapshot" is needed.
             wireSubmitListeners();
             syncSubmitButton();
-            syncStashButton();
 
             function captureSavedSnapshot() {
                 savedSnapshot = snapshotForm();
@@ -2438,7 +2419,6 @@
                             priorMaxMinutes = data.prior_max_minutes;
                         }
                         syncSubmitButton();
-                        syncStashButton();
                         // Skip and Done Scoring share the right-side slot:
                         // before any submit Skip is there; once a score
                         // exists the right slot belongs to Done Scoring.
@@ -2666,61 +2646,6 @@
             function setStashBannerVisible(visible) {
                 const el = document.getElementById("stash-info-banner");
                 if (el) el.style.display = visible ? "" : "none";
-            }
-
-            // Clear every tracked input. Synthetic input events re-fire the
-            // button-sync listeners that watch the fields, so dependent UI
-            // stays in sync.
-            function clearAllFields() {
-                TRACKED_INPUT_FIELDS.forEach(f => {
-                    const el = fieldEl(f);
-                    if (!el || el.value === "") return;
-                    el.value = "";
-                    el.dispatchEvent(new Event("input", { bubbles: true }));
-                });
-            }
-
-            async function stashScore() {
-                const btn = document.getElementById("stash-btn");
-                btn.disabled = true;
-                btn.textContent = "Stashing...";
-                const restore = () => {
-                    btn.textContent = "Stash";
-                    syncStashButton();
-                };
-                try {
-                    const body = collectForm();
-                    const resp = await fetch("/api/stash", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify(body),
-                    });
-                    const data = await resp.json();
-                    if (data.success) {
-                        // data.score_path is history.jsonl, where the draft
-                        // persists (the output_scores.zip export is generated on
-                        // demand, not touched by stashing).
-                        showResultHtml("success",
-                            "Score stashed to " + pathLinkHtml(data.score_path) + ".");
-                        // Snapshot what we just sent BEFORE clearing the
-                        // fields, so Restore can pull it back in. Mirrors
-                        // the server's flat draft shape.
-                        currentStash = body;
-                        renderPriorScores();
-                        // The stash is on disk now — wipe the inputs so the
-                        // user gets a fresh form. Reopening this sample
-                        // reloads the stash via the server-side pre-fill.
-                        clearAllFields();
-                        captureSavedSnapshot();
-                        setStashBannerVisible(true);
-                    } else {
-                        showResultText("error", "Error: " + (data.error || "Unknown"));
-                    }
-                    restore();
-                } catch (err) {
-                    alert("Error: " + err.message);
-                    restore();
-                }
             }
 
             async function dropStash() {
