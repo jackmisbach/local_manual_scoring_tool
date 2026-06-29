@@ -87,7 +87,6 @@ def _build_state(samples_dir: Path) -> ScoringState:
         "images_dir": samples_dir.parent / "images",
         "sample_ids": [SAMPLE_UUID],
         "cli_image": "",
-        "gui_override": False,
         "no_container": True,
         "cli_no_container": True,
         "attach": False,

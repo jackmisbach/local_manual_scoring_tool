@@ -33,7 +33,6 @@ from scoring.infra import (
     container_is_running,
     list_running_scoring_containers,
     open_vscode_in_container,
-    setup_display,
     stop_all_scoring_containers,
     stop_container,
 )
@@ -923,15 +922,6 @@ def create_app(
             daemon=True,
         ).start()
         return jsonify(success=True)
-
-    @app.route("/api/setup-display", methods=["POST"])
-    def api_setup_display() -> ResponseReturnValue:
-        with lock:
-            cn = state["container_name"]
-        ok = setup_display(cn)
-        if ok:
-            return jsonify(success=True, url="http://localhost:6080/vnc.html")
-        return jsonify(success=False, error="noVNC setup failed")
 
     @app.route("/api/open", methods=["POST"])
     def open_target() -> ResponseReturnValue:

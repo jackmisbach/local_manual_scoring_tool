@@ -56,7 +56,7 @@ Key invariants (do not reintroduce what was stripped):
 - `scoring/infra.py` — Docker + image loading. `ensure_task_image` (read tag
   from tarball manifest, reuse-or-`docker load`), `start_container` (bind-mounts
   the sample's `project/`, forwards ports, installs `requirements.txt`),
-  `setup_display` (noVNC), `open_vscode_in_container`. No Hawk/AWS here.
+  `open_vscode_in_container`. No Hawk/AWS here.
 - `scoring/config.py` — per-user config at
   `~/.config/local-manual-scoring-tool/config.json` (honors `$XDG_CONFIG_HOME`),
   the resolved accessors (samples/images dir, scorer, guidance URLs), and the

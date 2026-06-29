@@ -47,7 +47,6 @@ class SetupState(TypedDict):
     """Live setup progress for the current sample."""
 
     status: str
-    gui: NotRequired[bool]
     ready_at: NotRequired[float]
     # True once the server auto-launched VS Code into the ready container.
     attached: NotRequired[bool]
@@ -95,7 +94,6 @@ class ScoringState(TypedDict):
     # dir, otherwise every discovered sample under samples_dir).
     sample_ids: list[str]
     cli_image: str
-    gui_override: bool
     no_container: bool
     cli_no_container: bool
     attach: bool

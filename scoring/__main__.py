@@ -41,7 +41,6 @@ from scoring.export import export_score_logs
 from scoring.infra import (
     ensure_task_image,
     open_vscode_in_container,
-    sample_needs_gui,
     start_container,
     stop_all_scoring_containers,
     stop_container,
@@ -234,9 +233,6 @@ def _setup_sample(state: ScoringState, lock: threading.Lock) -> None:
             cli_image = state["cli_image"]
             no_container = state["no_container"]
             attach = state["attach"]
-            sample_uuid = state["queue"][state["current_idx"]]["uuid"]
-            gui = state["gui_override"] or sample_needs_gui(sample_uuid)
-            state["setup_state"]["gui"] = gui
 
         if no_container:
             _update_setup_state(state, lock, uuid, status="idle")
@@ -268,7 +264,6 @@ def _setup_sample(state: ScoringState, lock: threading.Lock) -> None:
                 container_name=container_name,
                 sample_dir=sample_dir,
                 project_dir=info["project_dir"],
-                gui=gui,
             )
         except RuntimeError as e:
             _update_setup_state(state, lock, uuid, status="error", message=str(e))
@@ -293,7 +288,7 @@ def _setup_sample(state: ScoringState, lock: threading.Lock) -> None:
 
 def advance_to_next(state: ScoringState, lock: threading.Lock) -> AdvanceResult:
     """Advance to the next pending sample and kick off its setup."""
-    # Tear down first — the next container binds the same noVNC port (6080).
+    # Tear down first — the next container binds the same forwarded ports.
     stop_all_scoring_containers()
 
     with lock:
@@ -454,7 +449,6 @@ def _build_state(args: argparse.Namespace, scorer_email: str) -> ScoringState | 
         "images_dir": images_dir,
         "sample_ids": sample_ids,
         "cli_image": args.image,
-        "gui_override": args.gui,
         "no_container": args.no_container,
         "cli_no_container": args.no_container,
         "attach": not args.no_attach,
@@ -591,9 +585,6 @@ def main() -> None:
         type=int,
         default=_SCORING_PORT,
         help=f"Scoring UI port (default: {_SCORING_PORT})",
-    )
-    parser.add_argument(
-        "--gui", action="store_true", help="Force noVNC for all samples (auto-detected for *_gui_*)"
     )
     parser.add_argument(
         "--no-container",

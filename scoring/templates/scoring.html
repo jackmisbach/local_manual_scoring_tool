@@ -622,7 +622,7 @@
                 --btn-success: #059669; /* green: proceed / start (Next, Start Container, Resume Timer) */
                 --btn-warning: #d97706; /* amber: caution / save-not-submit / retry (Stash, Pause, Push, Retry) */
                 --btn-danger: #dc2626; /* red: destructive (Exit, Reset Timer, Stop Container) */
-                --btn-neutral: #6b7280; /* gray: secondary (Skip, Open Artifacts, Tasks, Install noVNC) */
+                --btn-neutral: #6b7280; /* gray: secondary (Skip, Open Artifacts, Tasks) */
             }
             button:not(:disabled):hover {
                 filter: brightness(0.92);
@@ -1229,16 +1229,6 @@
                         <button class="btn-primary" id="open-vscode-btn" onclick="openInVscode()">
                             Open in VS Code
                         </button>
-                        <span id="novnc-section">
-                            <button class="btn-neutral" id="novnc-btn" onclick="setupDisplay()">
-                                Install noVNC Display
-                            </button>
-                            <span
-                                id="novnc-status"
-                                style="display: none; font-size: 0.85em; color: #666; margin-left: 8px"
-                            ></span>
-                            <span id="novnc-link" style="display: none; font-size: 0.85em"></span>
-                        </span>
                     </div>
                 </div>
                 <div id="setup-error" {% if initial_section !="setup-error" %}style="display: none" {% endif %}>
@@ -1867,7 +1857,6 @@
                             depBanner.style.display = "none";
                         }
                     }
-                    if (data.gui) document.getElementById("novnc-section").style.display = "none";
                     // Auto-attach runs server-side, so the browser never sees an
                     // Open in VS Code click. When the server reports it attached,
                     // start the timer here instead.
@@ -2904,37 +2893,6 @@
                     alert("Error: " + err.message);
                     btn.disabled = false;
                     btn.textContent = "Retry";
-                }
-            }
-
-            async function setupDisplay() {
-                const btn = document.getElementById("novnc-btn");
-                const status = document.getElementById("novnc-status");
-                const link = document.getElementById("novnc-link");
-                btn.disabled = true;
-                btn.textContent = "Installing...";
-                status.style.display = "inline";
-                status.textContent = "This may take a minute...";
-                try {
-                    const resp = await fetch("/api/setup-display", { method: "POST" });
-                    const data = await resp.json();
-                    status.style.display = "none";
-                    if (data.success) {
-                        btn.style.display = "none";
-                        link.style.display = "inline";
-                        link.innerHTML =
-                            `<a href="${data.url}" target="_blank" style="color: #7c3aed;">${data.url}</a> ` +
-                            '<span style="color: #666;">| Run with: DISPLAY=:99 SDL_VIDEODRIVER=x11 python main.py</span>';
-                    } else {
-                        btn.disabled = false;
-                        btn.textContent = "Install noVNC Display";
-                        alert("noVNC setup failed: " + (data.error || "Unknown error"));
-                    }
-                } catch (err) {
-                    status.style.display = "none";
-                    btn.disabled = false;
-                    btn.textContent = "Install noVNC Display";
-                    alert("Error: " + err.message);
                 }
             }
 

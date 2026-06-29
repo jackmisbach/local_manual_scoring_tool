@@ -72,7 +72,6 @@ local-manual-score [SAMPLES_DIR] [options]
 | `--images-dir DIR`  | Where image tarballs live. Default: `<samples-dir>/../images`.                                 |
 | `--image TAG`       | Use this already-loaded local Docker tag for all samples (overrides each `sample.json` image). |
 | `--port N`          | Scoring UI port (default: 9090).                                                              |
-| `--gui`             | Force noVNC for all samples (auto-detected for `*_gui_*`).                                     |
 | `--no-container`    | Skip image load, container start, and VS Code launch (UI testing).                            |
 | `--no-attach`       | Start containers but don't auto-attach VS Code.                                               |
 | `--include-skipped` | Re-surface previously skipped samples.                                                        |

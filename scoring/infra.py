@@ -13,7 +13,6 @@ import subprocess
 import sys
 import tarfile
 import threading
-import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -31,11 +30,6 @@ SCORER_NAME_METADATA_KEY = "scorer_name"
 
 # Versions the scoring payload format (not the package).
 SCORING_VERSION = "0.0.1"
-
-
-def sample_needs_gui(sample_id: str) -> bool:
-    """Auto-detect whether a sample needs GUI (noVNC) setup."""
-    return "_gui_" in sample_id.lower() or sample_id.lower().endswith("_gui")
 
 
 # ---------------------------------------------------------------------------
@@ -186,7 +180,7 @@ def _disable_project_filemode(project_dir: Path) -> None:
 # Container lifecycle
 # ---------------------------------------------------------------------------
 
-_FORWARDED_PORTS = (3000, 5000, 6080, 8000, 8080, 8888)
+_FORWARDED_PORTS = (3000, 5000, 8000, 8080, 8888)
 
 
 def _enable_localhost_forwarding(container_name: str) -> None:
@@ -245,7 +239,6 @@ def start_container(
     container_name: str,
     sample_dir: Path,
     project_dir: str,
-    gui: bool = False,
 ) -> tuple[str, list[str]]:
     """Start a detached container with the sample's ``project/`` bind-mounted.
 
@@ -295,8 +288,6 @@ def start_container(
     container_id = result.stdout.strip()[:12]
     _enable_localhost_forwarding(container_name)
     skipped_deps = _install_project_deps(container_name, project_dir)
-    if gui:
-        setup_display(container_name)
     return container_id, skipped_deps
 
 
@@ -355,75 +346,6 @@ def _install_project_deps(container_name: str, project_dir: str) -> list[str]:
         msg = (result.stdout + result.stderr).strip() or "unknown error"
         raise RuntimeError(f"pip install failed: {msg}")
     return skipped
-
-
-def setup_display(container_name: str) -> bool:
-    """Install and start Xvfb + noVNC so pygame apps can be viewed in a browser."""
-    print("Setting up display (noVNC)...", flush=True)
-
-    install = subprocess.run(
-        [
-            "docker",
-            "exec",
-            container_name,
-            "bash",
-            "-c",
-            "DEBIAN_FRONTEND=noninteractive apt-get update -qq && "
-            "apt-get install -y -qq --no-install-recommends xvfb x11vnc novnc websockify "
-            "libsdl2-2.0-0 libsdl2-image-2.0-0 libsdl2-mixer-2.0-0 libsdl2-ttf-2.0-0 >/dev/null 2>&1",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
-    if install.returncode != 0:
-        print(f"noVNC install failed: {install.stderr.strip()}", file=sys.stderr)
-        return False
-
-    for cmd in [
-        "Xvfb :99 -screen 0 1920x1080x24",
-        "x11vnc -display :99 -forever -nopw -rfbport 5900",
-    ]:
-        subprocess.run(["docker", "exec", "-d", container_name, "bash", "-c", cmd], check=False)
-
-    time.sleep(2)
-    subprocess.run(
-        [
-            "docker",
-            "exec",
-            "-d",
-            container_name,
-            "bash",
-            "-c",
-            "websockify --web /usr/share/novnc 6080 localhost:5900",
-        ],
-        check=False,
-    )
-    time.sleep(1)
-
-    verify = subprocess.run(
-        [
-            "docker",
-            "exec",
-            container_name,
-            "python3",
-            "-c",
-            "import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost',5900)); s.close(); "
-            "s=socket.socket(); s.settimeout(2); s.connect(('localhost',6080)); s.close()",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if verify.returncode == 0:
-        print("noVNC display ready: http://localhost:6080/vnc.html")
-        print(
-            "Run GUI apps with: DISPLAY=:99 SDL_VIDEODRIVER=x11 XDG_RUNTIME_DIR=/tmp python main.py"
-        )
-        return True
-    print(f"noVNC verification failed: {verify.stderr.strip()}", file=sys.stderr)
-    return False
 
 
 def stop_container(container_name: str) -> None:
