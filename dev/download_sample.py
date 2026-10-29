@@ -16,8 +16,9 @@ It mirrors the resolution / S3 flow in METR/manual-scoring-tool's
 CLIs; shared Hawk helpers live in ``_common.py``).
 
 Prerequisites:
-  - ``hawk`` CLI, logged in (``hawk login``)
-  - ``aws`` CLI with the TaskDeveloper SSO role (``aws sso login``)
+  - ``hawk`` CLI with ``hawk download --prefix``, logged in (``hawk login``)
+  - ``aws`` CLI with the TaskDeveloper SSO role (``aws sso login``), only for
+    older samples whose artifacts are outside Hawk
 
 Per-sample folders are written under ``data/samples/`` by default (override with
 --output-dir).
@@ -35,16 +36,63 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
-from _common import fetch_artifact_url, resolve_sample, s3_read_url, tar_name
+from _common import fetch_artifact_url, hawk_artifact_path, resolve_sample, tar_name
+
+
+def _hawk_download(eval_set_id: str, prefix: str, target: Path) -> None:
+    """Download the files under ``prefix`` in an eval set's folder into ``target``.
+
+    Leaves ``target`` absent if there are none.
+    """
+    # hawk writes <dir>/<prefix>..., so download beside target and move that in.
+    with tempfile.TemporaryDirectory(dir=target.parent) as tmp:
+        result = subprocess.run(
+            # --include-git keeps the project's .git, as `aws s3 cp` did: scorers
+            # review the agent's commits and tags, and the scoring tool sets
+            # core.fileMode in it. hawk skips it by default because its config is
+            # agent-written and git runs commands that config names.
+            ["hawk", "download", eval_set_id, "--prefix", prefix, "--include-git", "-o", tmp],
+            capture_output=True,
+            text=True,
+            check=False,
+            # hawk asks "Continue anyway?" on a CLI/server version mismatch when
+            # stdin is a terminal, which would hang with its output captured.
+            stdin=subprocess.DEVNULL,
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            if "No files found" in stderr:
+                return
+            raise RuntimeError(f"hawk download failed: {stderr}")
+        if result.stderr:
+            print(result.stderr, end="", file=sys.stderr)  # e.g. files hawk skipped
+        Path(tmp, prefix).rename(target)
+
+
+def _aws_download(s3_prefix: str, target: Path) -> None:
+    """Download ``s3_prefix`` recursively into ``target`` with the aws CLI."""
+    result = subprocess.run(
+        ["aws", "s3", "cp", s3_prefix, str(target), "--recursive"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        if "Token has expired" in stderr or "refresh failed" in stderr:
+            raise RuntimeError("AWS SSO session has expired. Run: aws sso login")
+        raise RuntimeError(f"S3 download failed: {stderr}")
 
 
 def download_project(artifact_url: str, dest_dir: Path, force: bool = False) -> Path:
-    """Download the sample's ``project/`` tree from S3 into ``dest_dir/project``.
+    """Download the sample's ``project/`` tree into ``dest_dir/project``.
 
-    Older samples store the tree under ``artifacts/`` instead of ``project/``;
-    both are tried and the result is always written to ``dest_dir/project``.
+    Artifacts in Hawk's bucket come through ``hawk download``, others (older
+    samples) straight from S3. Older samples store the tree under ``artifacts/``
+    instead of ``project/``; both are tried and the result is always written to
+    ``dest_dir/project``.
     """
     target = dest_dir / "project"
     if target.is_dir() and any(target.iterdir()) and not force:
@@ -53,19 +101,15 @@ def download_project(artifact_url: str, dest_dir: Path, force: bool = False) -> 
     if target.exists():
         shutil.rmtree(target)
 
-    base = s3_read_url(artifact_url).rstrip("/")
+    hawk_path = hawk_artifact_path(artifact_url)
+    base = artifact_url.rstrip("/")
     for sub in ("project", "artifacts"):
         print(f"  downloading {base}/{sub}/ -> {target} ...")
-        result = subprocess.run(
-            ["aws", "s3", "cp", f"{base}/{sub}", str(target), "--recursive"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            stderr = result.stderr.strip()
-            if "Token has expired" in stderr or "refresh failed" in stderr:
-                raise RuntimeError("AWS SSO session has expired. Run: aws sso login")
-            raise RuntimeError(f"S3 download failed: {stderr}")
+        if hawk_path is None:
+            _aws_download(f"{base}/{sub}", target)
+        else:
+            eval_set_id, folder_path = hawk_path
+            _hawk_download(eval_set_id, f"{folder_path}/{sub}/", target)
         if target.is_dir() and any(target.rglob("*")):
             return target
         # Empty: this prefix didn't exist; try the next candidate.

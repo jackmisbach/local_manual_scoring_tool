@@ -27,11 +27,9 @@ ECR_TASKS_REPO = f"{ECR_REGISTRY}/prd/inspect-tasks"
 # and its metadata holds the canonical artifact_url (s3_url for older samples).
 INFO_ROW = "manual_scorer"
 
-# Score metadata records the artifact location under the canonical bucket name,
-# but reads go through the Object Lambda Access Point alias the TaskDeveloper
-# SSO role can read. Every aws s3 call must target the alias.
+# Score metadata records the artifact location as an S3 URL. Artifacts in Hawk's
+# bucket are read through the Hawk API with ``hawk download``.
 _ARTIFACT_BUCKET = "prd-metr-inspect"
-_ARTIFACT_OLAP_ALIAS = "prd-inspect-ai-eval-cwnwya6rbkakuzpwomuigcndusw2a--ol-s3"
 
 _access_token: str | None = None
 
@@ -104,15 +102,18 @@ def hawk_api_get(path: str, params: dict[str, str] | None = None) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def s3_read_url(artifact_url: str) -> str:
-    """Rewrite an artifact URL to target the OLAP alias for read access.
+def hawk_artifact_path(artifact_url: str) -> tuple[str, str] | None:
+    """Split an artifact URL in Hawk's bucket into its eval set ID and folder path.
 
-    Idempotent: a URL already pointing at the alias is returned unchanged.
+    e.g. ``s3://<bucket>/evals/<eval_set_id>/artifacts/<uuid>`` ->
+    ``("<eval_set_id>", "artifacts/<uuid>")``, as ``hawk download`` takes them.
+    Returns None for a URL outside Hawk's bucket.
     """
-    prefix = f"s3://{_ARTIFACT_BUCKET}/"
+    prefix = f"s3://{_ARTIFACT_BUCKET}/evals/"
     if not artifact_url.startswith(prefix):
-        return artifact_url
-    return f"s3://{_ARTIFACT_OLAP_ALIAS}/" + artifact_url[len(prefix) :]
+        return None
+    eval_set_id, _, folder_path = artifact_url[len(prefix) :].rstrip("/").partition("/")
+    return eval_set_id, folder_path
 
 
 def info_row_artifact_url(info_metadata: dict[str, Any] | None) -> str:
