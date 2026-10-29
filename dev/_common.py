@@ -9,6 +9,7 @@ by the individual scripts).
 from __future__ import annotations
 
 import json
+import re
 import socket
 import subprocess
 import sys
@@ -47,7 +48,11 @@ def get_access_token(stale: str | None = None) -> str:
     global _access_token
     if _access_token is not None and _access_token != stale:
         return _access_token
-    result = subprocess.run(["hawk", "auth", "access-token"], capture_output=True, text=True)
+    # hawk asks "Continue anyway?" on a CLI/server version mismatch when stdin
+    # is a terminal, which would hang with its output captured.
+    result = subprocess.run(
+        ["hawk", "auth", "access-token"], capture_output=True, text=True, stdin=subprocess.DEVNULL
+    )
     if result.returncode != 0:
         raise RuntimeError("hawk auth failed; run: hawk login")
     _access_token = result.stdout.strip()
@@ -56,7 +61,9 @@ def get_access_token(stale: str | None = None) -> str:
 
 @cache
 def _get_api_url() -> str:
-    result = subprocess.run(["hawk", "config"], capture_output=True, text=True)
+    result = subprocess.run(
+        ["hawk", "config"], capture_output=True, text=True, stdin=subprocess.DEVNULL
+    )
     for line in result.stdout.splitlines():
         if line.startswith("HAWK_API_URL="):
             return line.split("=", 1)[1]
@@ -102,18 +109,27 @@ def hawk_api_get(path: str, params: dict[str, str] | None = None) -> Any:
 # ---------------------------------------------------------------------------
 
 
+# A Hawk run's artifact folder: s3://<bucket>/evals/<eval_set_id>/artifacts/...
+_HAWK_ARTIFACTS = re.compile(rf"s3://{re.escape(_ARTIFACT_BUCKET)}/evals/([^/]+)/(artifacts/.+?)/?")
+
+
 def hawk_artifact_path(artifact_url: str) -> tuple[str, str] | None:
-    """Split an artifact URL in Hawk's bucket into its eval set ID and folder path.
+    """Split a Hawk run's artifact URL into its eval set ID and folder path.
 
     e.g. ``s3://<bucket>/evals/<eval_set_id>/artifacts/<uuid>`` ->
     ``("<eval_set_id>", "artifacts/<uuid>")``, as ``hawk download`` takes them.
-    Returns None for a URL outside Hawk's bucket.
+    Returns None for a URL outside Hawk's bucket (an older sample's). Raises for
+    any other URL in Hawk's bucket: only ``hawk download`` can read that bucket.
     """
-    prefix = f"s3://{_ARTIFACT_BUCKET}/evals/"
-    if not artifact_url.startswith(prefix):
+    if not artifact_url.startswith(f"s3://{_ARTIFACT_BUCKET}/"):
         return None
-    eval_set_id, _, folder_path = artifact_url[len(prefix) :].rstrip("/").partition("/")
-    return eval_set_id, folder_path
+    match = _HAWK_ARTIFACTS.fullmatch(artifact_url)
+    if match is None:
+        raise RuntimeError(
+            f"{artifact_url} is in Hawk's bucket but isn't a run's artifact folder"
+            " (evals/<eval_set_id>/artifacts/...), so it can't be downloaded"
+        )
+    return match[1], match[2]
 
 
 def info_row_artifact_url(info_metadata: dict[str, Any] | None) -> str:

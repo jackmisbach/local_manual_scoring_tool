@@ -49,9 +49,10 @@ UUID it populates `data/samples/<uuid>/` with:
 ./dev/download_sample.py uuid1 --output-dir data/samples --force
 ```
 
-Needs the **hawk** and **AWS** CLIs (see prerequisites below; Docker is not required
-for this script). If a UUID fails, the rest still run; the script exits non-zero and
-lists the failures.
+Needs the **hawk** CLI and server 4.0.0 or later, and the **AWS** CLI for older
+samples stored outside Hawk (see prerequisites below; Docker is not required for this
+script). If a UUID fails, the rest still run; the script exits non-zero and lists the
+failures.
 
 ## `download_starting_image.py`
 

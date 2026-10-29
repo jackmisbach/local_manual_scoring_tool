@@ -16,7 +16,8 @@ It mirrors the resolution / S3 flow in METR/manual-scoring-tool's
 CLIs; shared Hawk helpers live in ``_common.py``).
 
 Prerequisites:
-  - ``hawk`` CLI with ``hawk download --prefix``, logged in (``hawk login``)
+  - ``hawk`` CLI and server 4.0.0 or later (for ``hawk download --prefix``),
+    logged in (``hawk login``)
   - ``aws`` CLI with the TaskDeveloper SSO role (``aws sso login``), only for
     older samples whose artifacts are outside Hawk
 
@@ -41,27 +42,47 @@ from pathlib import Path
 
 from _common import fetch_artifact_url, hawk_artifact_path, resolve_sample, tar_name
 
+# hawk download saves the eval set ID it's given in these files, making it the
+# default for the user's later bare hawk commands, such as `hawk stop`.
+_HAWK_LAST_ID_FILES = (
+    Path.home() / ".config" / "hawk-cli" / "last-eval-set-id",
+    Path.home() / ".config" / "hawk-cli" / "last-job-id",
+)
+
 
 def _hawk_download(eval_set_id: str, prefix: str, target: Path) -> None:
     """Download the files under ``prefix`` in an eval set's folder into ``target``.
 
     Leaves ``target`` absent if there are none.
     """
+    saved_ids = {
+        id_file: id_file.read_bytes() if id_file.exists() else None
+        for id_file in _HAWK_LAST_ID_FILES
+    }
     # hawk writes <dir>/<prefix>..., so download beside target and move that in.
     with tempfile.TemporaryDirectory(dir=target.parent) as tmp:
-        result = subprocess.run(
-            # --include-git keeps the project's .git, as `aws s3 cp` did: scorers
-            # review the agent's commits and tags, and the scoring tool sets
-            # core.fileMode in it. hawk skips it by default because its config is
-            # agent-written and git runs commands that config names.
-            ["hawk", "download", eval_set_id, "--prefix", prefix, "--include-git", "-o", tmp],
-            capture_output=True,
-            text=True,
-            check=False,
-            # hawk asks "Continue anyway?" on a CLI/server version mismatch when
-            # stdin is a terminal, which would hang with its output captured.
-            stdin=subprocess.DEVNULL,
-        )
+        try:
+            result = subprocess.run(
+                # --include-git keeps the project's .git, as `aws s3 cp` did, since
+                # scorers review the agent's commits and tags. hawk skips it by
+                # default because its config is agent-written and git runs
+                # commands that config names.
+                ["hawk", "download", eval_set_id, "--prefix", prefix, "--include-git", "-o", tmp],
+                capture_output=True,
+                text=True,
+                check=False,
+                # hawk asks "Continue anyway?" on a CLI/server version mismatch when
+                # stdin is a terminal, which would hang with its output captured.
+                stdin=subprocess.DEVNULL,
+            )
+        finally:
+            # Put the user's defaults back, so their next bare hawk command still
+            # targets their own run rather than this eval set.
+            for id_file, saved in saved_ids.items():
+                if saved is None:
+                    id_file.unlink(missing_ok=True)
+                else:
+                    id_file.write_bytes(saved)
         if result.returncode != 0:
             stderr = result.stderr.strip()
             if "No files found" in stderr:
@@ -98,10 +119,10 @@ def download_project(artifact_url: str, dest_dir: Path, force: bool = False) -> 
     if target.is_dir() and any(target.iterdir()) and not force:
         print(f"  project/ already present at {target}, skipping (use --force to re-download)")
         return target
+    hawk_path = hawk_artifact_path(artifact_url)
     if target.exists():
         shutil.rmtree(target)
 
-    hawk_path = hawk_artifact_path(artifact_url)
     base = artifact_url.rstrip("/")
     for sub in ("project", "artifacts"):
         print(f"  downloading {base}/{sub}/ -> {target} ...")
